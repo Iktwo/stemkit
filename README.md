@@ -57,3 +57,4 @@ src/preload      IPC bridge
 src/renderer     React UI (player, sync engine, waveforms)
 python/          separate.py — demucs wrapper with JSON progress output
 ```
+# stemkit
