@@ -53,6 +53,13 @@ export type JobEvent =
   | { kind: 'done'; data: JobDone }
   | { kind: 'failed'; data: JobFailed }
 
+export interface SearchResult {
+  videoId: string
+  title: string
+  channel?: string
+  duration?: number
+}
+
 export interface StemKitApi {
   envStatus(): Promise<EnvStatus>
   envBootstrap(): Promise<boolean>
@@ -62,8 +69,9 @@ export interface StemKitApi {
   getBuffers(videoId: string): Promise<Record<string, Uint8Array>>
   exportStem(videoId: string, stem: string): Promise<{ saved: boolean; path?: string }>
   exportAllStems(videoId: string): Promise<{ saved: boolean; path?: string; count?: number }>
-  startJob(url: string, model?: string): Promise<{ started: boolean }>
-  cancelJob(): Promise<void>
+  searchYouTube(query: string): Promise<SearchResult[]>
+  startJob(url: string, model?: string, stems?: string[]): Promise<{ started: boolean }>
+  cancelJob(videoId?: string): Promise<void>
   openExternal(url: string): Promise<void>
   onJobEvent(cb: (ev: JobEvent) => void): () => void
   onEnvEvent(cb: (ev: EnvEvent) => void): () => void

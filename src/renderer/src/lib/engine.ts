@@ -1,7 +1,5 @@
 import type { StemId } from '../../../shared/types'
 
-const DRIFT_LIMIT = 0.06
-
 export type BufferMap = Partial<Record<StemId, AudioBuffer>>
 
 export async function decodePayload(
@@ -93,16 +91,17 @@ export class StemEngine {
     this.anchorCtx = startAt
   }
 
-  tick(actualTime: number): number {
-    if (!this.ctx || !this.playing || !this.hasBuffers()) return actualTime
-    let expected =
-      this.anchorYt + (this.ctx.currentTime - this.anchorCtx) * this.rate
-    if (Math.abs(actualTime - expected) > DRIFT_LIMIT) {
-      this.align(actualTime)
-      expected =
-        this.anchorYt + (this.ctx.currentTime - this.anchorCtx) * this.rate
+  expected(): number {
+    if (!this.ctx || !this.playing) return this.anchorYt
+    return this.anchorYt + (this.ctx.currentTime - this.anchorCtx) * this.rate
+  }
+
+  trackDuration(): number {
+    let d = 0
+    for (const buf of Object.values(this.buffers)) {
+      if (buf && buf.duration > d) d = buf.duration
     }
-    return expected
+    return d
   }
 
   applyMix(

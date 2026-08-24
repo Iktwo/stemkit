@@ -31,16 +31,35 @@ export function userDataDir(): string {
   return app.getPath('userData')
 }
 
+const IS_WIN = process.platform === 'win32'
+const EXE = IS_WIN ? '.exe' : ''
+const VENV_BIN = IS_WIN ? 'Scripts' : 'bin'
+
 export function venvDir(): string {
   return join(userDataDir(), 'venv')
 }
 
 export function venvPython(): string {
-  return join(venvDir(), 'bin', 'python')
+  return join(venvDir(), VENV_BIN, 'python' + EXE)
 }
 
 export function venvYtDlp(): string {
-  return join(venvDir(), 'bin', 'yt-dlp')
+  return join(venvDir(), VENV_BIN, 'yt-dlp' + EXE)
+}
+
+function venvPip(): string {
+  return join(venvDir(), VENV_BIN, 'pip' + EXE)
+}
+
+export function bundledFfmpeg(): string | null {
+  const name = 'ffmpeg' + EXE
+  const candidates = app.isPackaged
+    ? [join(process.resourcesPath, 'ffmpeg', name)]
+    : [join(app.getAppPath(), 'extras', IS_WIN ? 'ffmpeg-win' : 'ffmpeg-mac', name)]
+  for (const c of candidates) {
+    if (existsSync(c)) return c
+  }
+  return null
 }
 
 export function separateScript(): string {
@@ -55,28 +74,48 @@ function cleanVersion(version: string): string {
 }
 
 async function detectJsRuntime(): Promise<void> {
-  const denoPaths = [
-    '/opt/homebrew/bin/deno',
-    '/usr/local/bin/deno',
-    join(homedir(), '.deno/bin/deno')
-  ]
-  for (const p of denoPaths) {
+  const denoPaths = IS_WIN
+    ? [
+        join(homedir(), '.deno', 'bin', 'deno.exe'),
+        join(process.env.LOCALAPPDATA ?? '', 'Programs', 'deno', 'deno.exe')
+      ]
+    : ['/opt/homebrew/bin/deno', '/usr/local/bin/deno', join(homedir(), '.deno/bin/deno')]
+  for (const p of denoPaths.filter((p): p is string => !!p && p.length > 0)) {
     if (existsSync(p)) {
       state.jsRuntime = { kind: 'deno', path: p }
       return
     }
   }
 
-  const nodeCandidates = ['/opt/homebrew/bin/node', '/usr/local/bin/node']
-  const nvmRoot = join(homedir(), '.nvm/versions/node')
-  try {
-    for (const ver of readdirSync(nvmRoot)) {
-      const major = parseInt(cleanVersion(ver).split('.')[0], 10)
-      if (!Number.isNaN(major) && major >= 18) {
-        nodeCandidates.push(join(nvmRoot, ver, 'bin', 'node'))
+  const nodeCandidates: string[] = []
+  if (IS_WIN) {
+    nodeCandidates.push(
+      join(process.env['ProgramFiles'] ?? 'C:\\Program Files', 'nodejs', 'node.exe'),
+      join(process.env['LOCALAPPDATA'] ?? '', 'Programs', 'nodejs', 'node.exe')
+    )
+    const nvmHome =
+      process.env.NVM_HOME ??
+      join(process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming'), 'nvm')
+    try {
+      for (const ver of readdirSync(nvmHome)) {
+        const major = parseInt(cleanVersion(ver).split('.')[0], 10)
+        if (!Number.isNaN(major) && major >= 18) {
+          nodeCandidates.push(join(nvmHome, ver, 'node.exe'))
+        }
       }
-    }
-  } catch {}
+    } catch {}
+  } else {
+    nodeCandidates.push('/opt/homebrew/bin/node', '/usr/local/bin/node')
+    const nvmRoot = join(homedir(), '.nvm/versions/node')
+    try {
+      for (const ver of readdirSync(nvmRoot)) {
+        const major = parseInt(cleanVersion(ver).split('.')[0], 10)
+        if (!Number.isNaN(major) && major >= 18) {
+          nodeCandidates.push(join(nvmRoot, ver, 'bin', 'node'))
+        }
+      }
+    } catch {}
+  }
 
   let best: { path: string; version: string } | null = null
   for (const p of nodeCandidates) {
@@ -108,6 +147,23 @@ export function ytDlpRuntimeArgs(): string[] {
 }
 
 function pyCandidates(): string[] {
+  if (IS_WIN) {
+    const localAppData = process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local')
+    const programFiles = process.env['ProgramFiles'] ?? 'C:\\Program Files'
+    return [
+      process.env.STEMKIT_PYTHON,
+      join(localAppData, 'Programs', 'Python', 'Python312', 'python.exe'),
+      join(localAppData, 'Programs', 'Python', 'Python311', 'python.exe'),
+      join(localAppData, 'Programs', 'Python', 'Python310', 'python.exe'),
+      join(localAppData, 'Programs', 'Python', 'Python39', 'python.exe'),
+      join(programFiles, 'Python312', 'python.exe'),
+      join(programFiles, 'Python311', 'python.exe'),
+      join(programFiles, 'Python310', 'python.exe'),
+      join(programFiles, 'Python39', 'python.exe'),
+      join(localAppData, 'Microsoft', 'WindowsApps', 'python3.exe'),
+      join(localAppData, 'Microsoft', 'WindowsApps', 'python.exe')
+    ].filter((p): p is string => !!p)
+  }
   const home = homedir()
   return [
     process.env.STEMKIT_PYTHON,
@@ -124,6 +180,15 @@ function pyCandidates(): string[] {
 }
 
 function ffCandidates(): string[] {
+  if (IS_WIN) {
+    const localAppData = process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local')
+    return [
+      process.env.STEMKIT_FFMPEG,
+      join(localAppData, 'Microsoft', 'WinGet', 'Links', 'ffmpeg.exe'),
+      'C:\\ffmpeg\\bin\\ffmpeg.exe',
+      join(process.env['ProgramFiles'] ?? 'C:\\Program Files', 'ffmpeg', 'bin', 'ffmpeg.exe')
+    ].filter((p): p is string => !!p)
+  }
   const home = homedir()
   return [
     process.env.STEMKIT_FFMPEG,
@@ -179,14 +244,19 @@ export async function detectTools(): Promise<void> {
     state.python = { found: true, path: best.path, version: best.version }
   }
 
-  for (const candidate of ffCandidates()) {
-    if (!existsSync(candidate)) continue
-    try {
-      await runCapture(candidate, ['-version'])
-      state.ffmpeg = { found: true, path: candidate }
-      break
-    } catch {
-      continue
+  const bundled = bundledFfmpeg()
+  if (bundled) {
+    state.ffmpeg = { found: true, path: bundled }
+  } else {
+    for (const candidate of ffCandidates()) {
+      if (!existsSync(candidate)) continue
+      try {
+        await runCapture(candidate, ['-version'])
+        state.ffmpeg = { found: true, path: candidate }
+        break
+      } catch {
+        continue
+      }
     }
   }
 
@@ -216,7 +286,7 @@ export async function bootstrap(): Promise<boolean> {
 
   try {
     const venv = venvDir()
-    const pip = join(venv, 'bin', 'pip')
+    const pip = venvPip()
 
     sendEnvEvent(`Creating virtual environment with ${state.python.path}`)
     await new Promise<void>((resolve, reject) => {
@@ -297,7 +367,7 @@ export async function updateYtDlp(): Promise<boolean> {
   try {
     sendEnvEvent('Updating yt-dlp...')
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(venvDir() ? join(venvDir(), 'bin', 'pip') : 'pip', [
+      const child = spawn(venvPip(), [
         'install',
         '-q',
         '-U',

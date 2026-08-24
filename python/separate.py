@@ -58,6 +58,7 @@ def main():
     parser.add_argument("--device", default="auto")
     parser.add_argument("--shifts", type=int, default=1)
     parser.add_argument("--overlap", type=float, default=0.25)
+    parser.add_argument("--only", default="")
     args = parser.parse_args()
 
     import torch
@@ -160,10 +161,22 @@ def main():
 
     import os
 
+    wanted = None
+    if args.only:
+        wanted = [s.strip() for s in args.only.split(",") if s.strip()]
+        unknown = [s for s in wanted if s not in model.sources]
+        if unknown:
+            fail(f"unknown stems requested: {', '.join(unknown)}")
+        if not wanted:
+            fail("no valid stems requested")
+        emit(type="progress", stage="separate", pct=0, message=f"writing {len(wanted)} stems")
+
     os.makedirs(args.out, exist_ok=True)
     out_cpu = sources[0].cpu().numpy()
     written = []
     for i, name in enumerate(model.sources):
+        if wanted is not None and name not in wanted:
+            continue
         path = os.path.join(args.out, f"{name}.wav")
         save_wav(path, out_cpu[i], sr)
         written.append(name)

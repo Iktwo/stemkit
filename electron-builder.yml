@@ -4,14 +4,30 @@ directories:
   output: release
 files:
   - out/**/*
+asar: true
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 extraResources:
   - from: python
     to: python
-asar: true
 mac:
   category: public.app-category.music
+  icon: build/icon.png
+  identity: null
   target:
     - target: dmg
       arch:
         - arm64
-  identity: null
+  extraResources:
+    - from: extras/ffmpeg-mac/ffmpeg
+      to: ffmpeg/ffmpeg
+win:
+  icon: build/icon.png
+  target:
+    - target: nsis
+    - target: zip
+  extraResources:
+    - from: extras/ffmpeg-win/ffmpeg.exe
+      to: ffmpeg/ffmpeg.exe
+nsis:
+  oneClick: true
+  perMachine: false

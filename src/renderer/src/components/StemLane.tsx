@@ -110,6 +110,7 @@ export function StemLane({
   }, [peaks, duration, getPosition, meta.color])
 
   const handleSeek = (e: React.MouseEvent<HTMLCanvasElement>): void => {
+    if (!peaks || duration <= 0) return
     const rect = e.currentTarget.getBoundingClientRect()
     const frac = (e.clientX - rect.left) / rect.width
     onSeek(Math.max(0, Math.min(1, frac)) * duration)
@@ -153,15 +154,6 @@ export function StemLane({
       >
         S
       </button>
-      {onExport && (
-        <button
-          onClick={onExport}
-          title="Export stem as WAV"
-          className="no-drag w-6 h-6 rounded-md bg-white/5 hover:bg-white/10 text-white/40 hover:text-white flex items-center justify-center transition-colors"
-        >
-          <DownloadIcon className="w-3.5 h-3.5" />
-        </button>
-      )}
 
       <canvas
         ref={canvasRef}
@@ -181,6 +173,16 @@ export function StemLane({
           background: `linear-gradient(to right, ${meta.color} ${volume * 100}%, rgba(255,255,255,0.14) ${volume * 100}%)`
         }}
       />
+
+      {onExport && (
+        <button
+          onClick={onExport}
+          title="Export stem as WAV"
+          className="no-drag w-6 h-6 rounded-md bg-white/5 hover:bg-white/10 text-white/40 hover:text-white flex items-center justify-center transition-colors shrink-0"
+        >
+          <DownloadIcon className="w-3.5 h-3.5" />
+        </button>
+      )}
     </div>
   )
 }

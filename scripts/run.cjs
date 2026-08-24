@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 const { spawnSync } = require('child_process')
 const fs = require('fs')
+const os = require('os')
 const path = require('path')
 
 const ROOT = path.join(__dirname, '..')
+const IS_WIN = process.platform === 'win32'
 
 function readRequiredMajor() {
   try {
@@ -31,17 +33,42 @@ function cmpSemver(a, b) {
   return 0
 }
 
-function findNvmNode(requiredMajor) {
-  const rootDir = path.join(process.env.HOME || '', '.nvm', 'versions', 'node')
+function findNode(requiredMajor) {
+  const candidates = []
+  if (IS_WIN) {
+    const programFiles = process.env['ProgramFiles'] || 'C:\\Program Files'
+    candidates.push(path.join(programFiles, 'nodejs', 'node.exe'))
+    const nvmHome =
+      process.env.NVM_HOME || path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'nvm')
+    try {
+      for (const ver of fs.readdirSync(nvmHome)) {
+        if (majorOf(ver) < requiredMajor) continue
+        const nodeBin = path.join(nvmHome, ver, 'node.exe')
+        if (fs.existsSync(nodeBin)) candidates.push(nodeBin)
+      }
+    } catch {}
+  } else {
+    candidates.push('/opt/homebrew/bin/node', '/usr/local/bin/node')
+    const nvmRoot = path.join(os.homedir(), '.nvm', 'versions', 'node')
+    try {
+      for (const ver of fs.readdirSync(nvmRoot)) {
+        if (majorOf(ver) < requiredMajor) continue
+        const nodeBin = path.join(nvmRoot, ver, 'bin', 'node')
+        if (fs.existsSync(nodeBin)) candidates.push(nodeBin)
+      }
+    } catch {}
+  }
+
   let best = null
-  try {
-    for (const ver of fs.readdirSync(rootDir)) {
-      if (majorOf(ver) < requiredMajor) continue
-      const nodeBin = path.join(rootDir, ver, 'bin', 'node')
-      if (!fs.existsSync(nodeBin)) continue
-      if (!best || cmpSemver(ver, best.version) > 0) best = { version: ver, nodeBin }
-    }
-  } catch {}
+  for (const nodeBin of candidates) {
+    if (!fs.existsSync(nodeBin)) continue
+    try {
+      const out = spawnSync(nodeBin, ['-v'], { encoding: 'utf8' })
+      const version = cleanVersion((out.stdout || '').trim())
+      if (majorOf(version) < requiredMajor) continue
+      if (!best || cmpSemver(version, best.version) > 0) best = { version, nodeBin }
+    } catch {}
+  }
   return best
 }
 
@@ -54,16 +81,21 @@ const STEPS = {
   ],
   'typecheck:node': [['tsc', '--noEmit', '-p', 'tsconfig.node.json']],
   'typecheck:web': [['tsc', '--noEmit', '-p', 'tsconfig.web.json']],
-  dist: [['electron-vite', 'build'], ['electron-builder', '--mac']]
+  dist: [['electron-vite', 'build'], ['electron-builder', '--mac']],
+  'dist:win': [['electron-vite', 'build'], ['electron-builder', '--win']],
+  'dist:all': [['electron-vite', 'build'], ['electron-builder', '--mac', '--win']]
 }
 
 function resolveBin(name) {
-  const local = path.join(ROOT, 'node_modules', '.bin', name)
+  const ext = IS_WIN ? '.cmd' : ''
+  const local = path.join(ROOT, 'node_modules', '.bin', name + ext)
   if (fs.existsSync(local)) return local
-  for (const dir of (process.env.PATH || '').split(':')) {
+  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
     if (!dir) continue
-    const candidate = path.join(dir, name)
-    if (fs.existsSync(candidate)) return candidate
+    for (const suffix of IS_WIN ? ['.cmd', '.exe', ''] : ['']) {
+      const candidate = path.join(dir, name + suffix)
+      if (fs.existsSync(candidate)) return candidate
+    }
   }
   console.error(`Cannot find ${name} — run npm install first`)
   process.exit(1)
@@ -71,7 +103,11 @@ function resolveBin(name) {
 
 function runSteps(steps) {
   for (const [bin, ...args] of steps) {
-    const r = spawnSync(resolveBin(bin), args, { stdio: 'inherit' })
+    const resolved = resolveBin(bin)
+    const r = spawnSync(resolved, args, {
+      stdio: 'inherit',
+      shell: IS_WIN && resolved.toLowerCase().endsWith('.cmd')
+    })
     if (r.status !== 0) process.exit(r.status ?? 1)
   }
 }
@@ -86,15 +122,15 @@ function main() {
 
   const required = readRequiredMajor()
   if (majorOf(process.versions.node) < required) {
-    const found = findNvmNode(required)
+    const found = findNode(required)
     if (!found) {
       console.error(
-        `StemKit needs Node ${required}+ but you have ${process.versions.node}, and no matching nvm install was found.\nInstall one with: nvm install ${required}`
+        `StemKit needs Node ${required}+ but you have ${process.versions.node}, and no matching Node install was found.\nInstall Node ${required} or newer from https://nodejs.org`
       )
       process.exit(1)
     }
     console.log(
-      `> StemKit needs Node ${required}+ (active: ${process.versions.node}) — using nvm ${found.version}`
+      `> StemKit needs Node ${required}+ (active: ${process.versions.node}) — using ${found.version} at ${found.nodeBin}`
     )
     const r = spawnSync(found.nodeBin, [__filename, ...process.argv.slice(2)], {
       stdio: 'inherit'

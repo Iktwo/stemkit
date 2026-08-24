@@ -36,6 +36,10 @@ export function Player({ song }: Props): React.ReactElement {
   const hostRef = useRef<YouTubeHost | null>(null)
   const posRef = useRef(0)
   const playingRef = useRef(false)
+  const videoSyncAtRef = useRef(0)
+
+  const VIDEO_DRIFT_LIMIT = 0.4
+  const VIDEO_RESYNC_COOLDOWN = 2000
 
   const [ytReady, setYtReady] = useState(false)
   const [decoding, setDecoding] = useState(true)
@@ -64,6 +68,7 @@ export function Player({ song }: Props): React.ReactElement {
     posRef.current = 0
     setPlaying(false)
     playingRef.current = false
+    videoSyncAtRef.current = 0
     setYtReady(false)
     setDecodeError(null)
     setBuffers({})
@@ -82,6 +87,8 @@ export function Player({ song }: Props): React.ReactElement {
         setBuffers(decoded)
         engine.setBuffers(decoded)
         setVols(Object.fromEntries(Object.keys(decoded).map((id) => [id, 1])))
+        const d = engine.trackDuration()
+        if (d > 0) setDuration(d)
         setDecoding(false)
       })
       .catch((err) => {
@@ -110,16 +117,10 @@ export function Player({ song }: Props): React.ReactElement {
       .mount(container, song.videoId, (state: YTState) => {
         if (disposed || !engine.hasBuffers()) return
         if (state === 'playing') {
-          engine.rate = host.rate() || 1
-          engine.setPlaying(true, host.time())
-          playingRef.current = true
-          setPlaying(true)
-        } else if (state === 'paused' || state === 'ended') {
-          const t = host.time()
-          posRef.current = t
-          engine.setPlaying(false, t)
-          playingRef.current = false
-          setPlaying(false)
+          videoSyncAtRef.current = 0
+          if (!playingRef.current) {
+            host.pause()
+          }
         }
       })
       .then(() => {
@@ -138,13 +139,39 @@ export function Player({ song }: Props): React.ReactElement {
   useEffect(() => {
     if (!playing) return
     let raf = 0
+    const tick = (): void => {
+      posRef.current = engine.expected()
+
+      const dur = engine.trackDuration()
+      if (dur > 0 && posRef.current >= dur - 0.03) {
+        posRef.current = dur
+        engine.stopAll()
+        playingRef.current = false
+        setPlaying(false)
+        hostRef.current?.pause()
+        setBump((n) => n + 1)
+        return
+      }
+
+      const now = performance.now()
+      if (now - videoSyncAtRef.current > VIDEO_RESYNC_COOLDOWN) {
+        const v = hostRef.current?.time() ?? 0
+        if (Math.abs(v - posRef.current) > VIDEO_DRIFT_LIMIT) {
+          videoSyncAtRef.current = now
+          hostRef.current?.seek(posRef.current)
+        }
+      }
+    }
     const loop = (): void => {
-      const t = hostRef.current?.time() ?? 0
-      posRef.current = engine.tick(t)
+      tick()
       raf = requestAnimationFrame(loop)
     }
     raf = requestAnimationFrame(loop)
-    return () => cancelAnimationFrame(raf)
+    const backup = setInterval(tick, 400)
+    return () => {
+      cancelAnimationFrame(raf)
+      clearInterval(backup)
+    }
   }, [playing])
 
   useEffect(() => {
@@ -158,13 +185,18 @@ export function Player({ song }: Props): React.ReactElement {
   }, [])
 
   const togglePlay = useCallback((): void => {
-    const host = hostRef.current
-    if (!host || decoding || decodeError) return
+    if (decoding || decodeError) return
     if (playingRef.current) {
-      host.pause()
+      playingRef.current = false
+      engine.setPlaying(false, posRef.current)
+      hostRef.current?.pause()
+      setPlaying(false)
     } else {
+      playingRef.current = true
       engine.resume()
-      host.play()
+      engine.setPlaying(true, posRef.current)
+      hostRef.current?.play()
+      setPlaying(true)
     }
   }, [decoding, decodeError])
 
@@ -172,8 +204,9 @@ export function Player({ song }: Props): React.ReactElement {
     (t: number): void => {
       const clamped = Math.max(0, Math.min(duration > 0 ? duration - 0.05 : t, t))
       posRef.current = clamped
-      hostRef.current?.seek(clamped)
       engine.setPlaying(playingRef.current, clamped)
+      videoSyncAtRef.current = performance.now()
+      hostRef.current?.seek(clamped)
       setBump((n) => n + 1)
     },
     [duration]
@@ -218,7 +251,14 @@ export function Player({ song }: Props): React.ReactElement {
 
   const toggleMute = (id: StemId): void => {
     setPreset('custom')
-    setSolos(new Set())
+    const turningOn = !mutes.has(id)
+    if (turningOn && solos.has(id)) {
+      setSolos((prev) => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+    }
     setMutes((prev) => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
@@ -229,7 +269,14 @@ export function Player({ song }: Props): React.ReactElement {
 
   const toggleSolo = (id: StemId): void => {
     setPreset('custom')
-    setMutes(new Set())
+    const turningOn = !solos.has(id)
+    if (turningOn && mutes.has(id)) {
+      setMutes((prev) => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+    }
     setSolos((prev) => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
@@ -249,80 +296,65 @@ export function Player({ song }: Props): React.ReactElement {
 
       <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-6">
         <div className="max-w-6xl mx-auto">
-          <div className="flex items-start gap-5">
-            <div className="relative w-full max-w-xl shrink">
-              <div className="absolute -inset-6 bg-violet-500/10 blur-3xl rounded-full pointer-events-none" />
-              <div className="relative aspect-video rounded-2xl overflow-hidden ring-1 ring-white/10 bg-black shadow-2xl shadow-black/60">
+          <div className="flex items-stretch gap-4 h-[200px]">
+            <div className="relative w-[356px] shrink-0">
+              <div className="absolute -inset-4 bg-violet-500/10 blur-3xl rounded-full pointer-events-none" />
+              <div className="absolute inset-0 rounded-xl overflow-hidden ring-1 ring-white/10 bg-black shadow-2xl shadow-black/60">
                 <div ref={containerRef} className="absolute inset-0 [&_iframe]:w-full [&_iframe]:h-full" />
                 {!ytReady && (
                   <div className="absolute inset-0 flex items-center justify-center animate-pulse">
-                    <span className="text-xs text-white/40 tracking-widest uppercase">loading video…</span>
+                    <span className="text-[10px] text-white/40 tracking-widest uppercase">loading…</span>
                   </div>
                 )}
-                {(decoding || decodeError) && (
-                  <div className="absolute inset-x-4 bottom-4 flex justify-center rise-in">
-                    <div className={`glass rounded-xl px-4 py-2 text-sm ${decodeError ? 'text-rose-300' : ''}`}>
-                      {decodeError ?? (
-                        <span className="flex items-center gap-2">
-                          <span className="w-3 h-3 rounded-full border-2 border-white/30 border-t-white animate-spin" />
-                          decoding stems…
-                        </span>
-                      )}
+                {decodeError && (
+                  <div className="absolute inset-x-3 bottom-3 flex justify-center rise-in">
+                    <div className="glass rounded-lg px-3 py-1.5 text-xs text-rose-300 break-words">
+                      {decodeError}
                     </div>
                   </div>
                 )}
               </div>
             </div>
 
-            <aside className="flex-1 min-w-0 glass rounded-2xl p-5 rise-in">
-              <div className="flex gap-4">
+            <aside className="flex-1 min-w-0 glass rounded-2xl px-5 py-4 rise-in flex flex-col justify-center gap-3">
+              <div className="flex items-center gap-3.5">
                 <img
                   src={`https://i.ytimg.com/vi/${song.videoId}/mqdefault.jpg`}
                   alt=""
-                  className="w-28 h-[63px] rounded-lg object-cover bg-white/5 shrink-0"
+                  className="w-16 h-9 rounded-md object-cover bg-white/5 shrink-0"
                   draggable={false}
                 />
-                <div className="min-w-0">
-                  <h3 className="text-[15px] font-semibold leading-snug line-clamp-2">{song.title}</h3>
-                  <p className="text-xs text-white/40 mt-1.5 font-mono">
-                    {fmtTime(song.duration)} · added {addedLabel}
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-[14px] font-semibold leading-snug truncate">{song.title}</h3>
+                  <p className="text-[11px] text-white/40 mt-0.5 font-mono truncate">
+                    {fmtTime(song.duration)} · added {addedLabel} ·{' '}
+                    {song.model === 'htdemucs_6s' ? '6-source engine' : '4-source engine'}
                   </p>
                 </div>
-              </div>
-
-              <div className="mt-4 flex items-center gap-2 flex-wrap">
-                <span className="text-[11px] px-2.5 py-1 rounded-full bg-violet-400/15 text-violet-200 font-medium">
-                  {song.model === 'htdemucs_6s' ? 'Extended · 6-stem model' : 'Standard · 4-stem model'}
-                </span>
-                <span className="text-[11px] px-2.5 py-1 rounded-full bg-white/5 text-white/50 font-medium">
+                <span className="shrink-0 text-[11px] px-2.5 py-1 rounded-full bg-white/5 text-white/50 font-medium">
                   {stemMeta.length} stems
                 </span>
               </div>
 
-              <div className="mt-5">
-                <span className="text-[11px] font-semibold uppercase tracking-widest text-white/30">Stems</span>
-                <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5">
-                  {stemMeta.map((meta) => (
-                    <span key={meta.id} className="flex items-center gap-2 text-[13px] text-white/70">
-                      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: meta.color }} />
-                      <span className="capitalize">{meta.label}</span>
-                    </span>
-                  ))}
-                </div>
-              </div>
-
-              <div className="mt-5 grid grid-cols-2 gap-2">
+              <div className="mt-3 flex items-center gap-x-4 gap-y-1.5 flex-wrap">
+                {stemMeta.map((meta) => (
+                  <span key={meta.id} className="flex items-center gap-1.5 text-[12px] text-white/70">
+                    <span className="w-2 h-2 rounded-full shrink-0" style={{ background: meta.color }} />
+                    <span className="capitalize">{meta.label}</span>
+                  </span>
+                ))}
+                <span className="flex-1" />
                 <button
                   onClick={exportAllStems}
                   disabled={decoding || !!decodeError}
-                  className="no-drag glass rounded-xl px-4 py-2.5 text-[13px] text-white/70 hover:text-white hover:bg-white/10 transition-colors flex items-center justify-center gap-2 disabled:opacity-40"
+                  className="no-drag glass rounded-lg px-3 py-2 text-[12px] text-white/70 hover:text-white hover:bg-white/10 transition-colors flex items-center gap-1.5 disabled:opacity-40"
                 >
                   <DownloadIcon className="w-3.5 h-3.5" />
                   Export all
                 </button>
                 <button
                   onClick={() => window.stemkit.openExternal(youtubeUrl)}
-                  className="no-drag glass rounded-xl px-4 py-2.5 text-[13px] text-white/70 hover:text-white hover:bg-white/10 transition-colors text-center"
+                  className="no-drag glass rounded-lg px-3 py-2 text-[12px] text-white/70 hover:text-white hover:bg-white/10 transition-colors"
                 >
                   YouTube
                 </button>

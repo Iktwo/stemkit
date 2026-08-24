@@ -9,7 +9,7 @@ import {
   getStatus
 } from './env'
 import { loadSongs, removeSong, stemBuffers, stemsDir, stemsFor } from './library'
-import { startJob, cancelJob } from './pipeline'
+import { startJob, cancelJob, searchYouTube } from './pipeline'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -32,7 +32,8 @@ function createWindow(): void {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: false,
+      backgroundThrottling: false
     }
   })
 
@@ -73,11 +74,11 @@ app.whenReady().then(async () => {
     return stemBuffers(videoId, song?.stems)
   })
 
-  ipcMain.handle('jobs:start', async (_e, url: string, model?: string) => {
-    void startJob(url, model)
+  ipcMain.handle('jobs:start', async (_e, url: string, model?: string, stems?: string[]) => {
+    void startJob(url, model, stems)
     return { started: true }
   })
-  ipcMain.handle('jobs:cancel', () => cancelJob())
+  ipcMain.handle('jobs:cancel', (_e, videoId?: string) => cancelJob(videoId))
 
   ipcMain.handle('stem:export', async (_e, videoId: string, stem: string) => {
     const song = loadSongs().find((s) => s.videoId === videoId)
@@ -114,6 +115,7 @@ app.whenReady().then(async () => {
     return { saved: true, path: target, count: list.length }
   })
 
+  ipcMain.handle('search:youtube', (_e, query: string) => searchYouTube(query))
   ipcMain.handle('open-external', (_e, url: string) => {
     if (/^https:\/\/(www\.)?(youtube\.com|youtu\.be)\//.test(url)) {
       shell.openExternal(url)

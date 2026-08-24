@@ -28,12 +28,17 @@ function stageLabel(stage: JobStage, pct: number): string {
   }
 }
 
+function withoutKey<T>(map: Record<string, T>, key: string): Record<string, T> {
+  const { [key]: _drop, ...rest } = map
+  return rest
+}
+
 export default function App(): React.ReactElement {
   const [status, setStatus] = useState<EnvStatus | null>(null)
   const [songs, setSongs] = useState<Song[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
-  const [job, setJob] = useState<JobProgress | null>(null)
-  const [jobError, setJobError] = useState<{ videoId: string; message: string } | null>(null)
+  const [jobs, setJobs] = useState<Record<string, JobProgress>>({})
+  const [errors, setErrors] = useState<Record<string, string>>({})
   const [lastUrl, setLastUrl] = useState('')
   const [lastModel, setLastModel] = useState('htdemucs')
   const [envLogs, setEnvLogs] = useState<EnvLog[]>([])
@@ -43,15 +48,17 @@ export default function App(): React.ReactElement {
     void window.stemkit.listSongs().then(setSongs)
     const offJob = window.stemkit.onJobEvent((ev) => {
       if (ev.kind === 'progress') {
-        setJobError(null)
-        setJob(ev.data)
+        setJobs((prev) => ({ ...prev, [ev.data.videoId]: ev.data }))
+        setErrors((prev) => (prev[ev.data.videoId] ? withoutKey(prev, ev.data.videoId) : prev))
       } else if (ev.kind === 'done') {
-        setJob(null)
-        setJobError(null)
+        setJobs((prev) => withoutKey(prev, ev.data.videoId))
+        setErrors((prev) => withoutKey(prev, ev.data.videoId))
         void window.stemkit.listSongs().then(setSongs)
-        setActiveId((cur) => cur ?? ev.data.song.videoId)
+      } else if (ev.data.message === 'Cancelled') {
+        setJobs((prev) => withoutKey(prev, ev.data.videoId))
       } else {
-        setJobError({ videoId: ev.data.videoId, message: ev.data.message })
+        setJobs((prev) => withoutKey(prev, ev.data.videoId))
+        setErrors((prev) => ({ ...prev, [ev.data.videoId]: ev.data.message }))
       }
     })
     const offEnv = window.stemkit.onEnvEvent((e) =>
@@ -69,20 +76,30 @@ export default function App(): React.ReactElement {
     }
   }, [status?.ready])
 
-  const startUrl = useCallback(async (url: string, model = 'htdemucs'): Promise<void> => {
-    setLastUrl(url)
-    setLastModel(model)
-    setJobError(null)
-    const vid = parseVideoId(url)
-    setJob({ videoId: vid ?? '', stage: 'metadata', pct: 0, message: 'Starting…', model })
-    await window.stemkit.startJob(url, model)
-  }, [])
+  const startUrl = useCallback(
+    async (url: string, model = 'htdemucs', stems?: string[]): Promise<void> => {
+      const vid = parseVideoId(url)
+      if (!vid) return
+      setLastUrl(url)
+      setLastModel(model)
+      setErrors((prev) => withoutKey(prev, vid))
+      setJobs((prev) =>
+        prev[vid]
+          ? prev
+          : { ...prev, [vid]: { videoId: vid, stage: 'metadata', pct: 0, message: 'Starting…', model } }
+      )
+      await window.stemkit.startJob(url, model, stems)
+    },
+    []
+  )
 
-  const cancelJob = useCallback((): void => {
-    void window.stemkit.cancelJob()
-    setJob(null)
-    setJobError(null)
-  }, [])
+  const cancelSelectedJob = useCallback(
+    (videoId: string): void => {
+      void window.stemkit.cancelJob(videoId)
+      setJobs((prev) => withoutKey(prev, videoId))
+    },
+    []
+  )
 
   const retryJob = useCallback((): void => {
     if (lastUrl) void startUrl(lastUrl, lastModel)
@@ -93,13 +110,16 @@ export default function App(): React.ReactElement {
     if (lastUrl) void startUrl(lastUrl, lastModel)
   }, [lastUrl, lastModel, startUrl])
 
-  const deleteSong = useCallback(async (videoId: string): Promise<void> => {
-    if (job?.videoId === videoId) return
-    if (jobError?.videoId === videoId) setJobError(null)
-    await window.stemkit.deleteSong(videoId)
-    setSongs(await window.stemkit.listSongs())
-    setActiveId((cur) => (cur === videoId ? null : cur))
-  }, [job, jobError])
+  const deleteSong = useCallback(
+    async (videoId: string): Promise<void> => {
+      if (jobs[videoId]) return
+      setErrors((prev) => withoutKey(prev, videoId))
+      await window.stemkit.deleteSong(videoId)
+      setSongs(await window.stemkit.listSongs())
+      setActiveId((cur) => (cur === videoId ? null : cur))
+    },
+    [jobs]
+  )
 
   const activeSong = useMemo(
     () => songs.find((s) => s.videoId === activeId) ?? null,
@@ -107,46 +127,50 @@ export default function App(): React.ReactElement {
   )
 
   const selectedJob = useMemo(
-    () => (job && job.videoId && job.videoId === activeId ? job : null),
-    [job, activeId]
+    () => (activeId ? jobs[activeId] ?? null : null),
+    [jobs, activeId]
   )
   const selectedError = useMemo(
-    () => (jobError && jobError.videoId === activeId ? jobError.message : null),
-    [jobError, activeId]
+    () => (activeId ? errors[activeId] ?? null : null),
+    [errors, activeId]
   )
 
   const pendingMap = useMemo(() => {
     const map: Record<string, { label: string; error?: boolean }> = {}
-    if (job && job.videoId) {
-      map[job.videoId] = { label: stageLabel(job.stage, job.pct) }
+    for (const j of Object.values(jobs)) {
+      map[j.videoId] = { label: stageLabel(j.stage, j.pct) }
     }
-    if (jobError) {
-      map[jobError.videoId] = { label: 'failed', error: true }
+    for (const [id, message] of Object.entries(errors)) {
+      if (!map[id]) {
+        map[id] = { label: /already being processed/.test(message) ? 'queued' : 'failed', error: true }
+      }
     }
     return map
-  }, [job, jobError])
+  }, [jobs, errors])
 
   const displaySongs = useMemo(() => {
     const known = new Set(songs.map((s) => s.videoId))
     const top: Song[] = []
-    if (job?.videoId && !known.has(job.videoId)) {
-      top.push({
-        videoId: job.videoId,
-        title: job.title ?? '',
-        duration: 0,
-        addedAt: 0,
-        model: job.model
-      })
+    for (const j of Object.values(jobs)) {
+      if (!known.has(j.videoId)) {
+        top.push({
+          videoId: j.videoId,
+          title: j.title ?? '',
+          duration: 0,
+          addedAt: 0,
+          model: j.model
+        })
+        known.add(j.videoId)
+      }
     }
-    if (
-      jobError &&
-      !known.has(jobError.videoId) &&
-      jobError.videoId !== job?.videoId
-    ) {
-      top.push({ videoId: jobError.videoId, title: '', duration: 0, addedAt: 0 })
+    for (const id of Object.keys(errors)) {
+      if (!known.has(id)) {
+        top.push({ videoId: id, title: '', duration: 0, addedAt: 0 })
+        known.add(id)
+      }
     }
     return [...top, ...songs]
-  }, [songs, job, jobError])
+  }, [songs, jobs, errors])
 
   if (!status) {
     return (
@@ -168,8 +192,6 @@ export default function App(): React.ReactElement {
     )
   }
 
-  const busyVideoId = job?.videoId || jobError?.videoId || null
-
   const selectedIsBusy = !!(selectedJob || selectedError)
 
   let main: React.ReactElement
@@ -181,7 +203,7 @@ export default function App(): React.ReactElement {
         botSuspected={
           !!selectedError && /sign in|bot|confirm|unavailable|private/i.test(selectedError)
         }
-        onCancel={cancelJob}
+        onCancel={() => activeId && cancelSelectedJob(activeId)}
         onRetry={retryJob}
         onUpdateYtDlp={() => void updateYtDlp()}
       />
@@ -189,7 +211,15 @@ export default function App(): React.ReactElement {
   } else if (activeSong) {
     main = <Player key={activeSong.videoId} song={activeSong} />
   } else {
-    main = <Home busy={!!job} hasSongs={displaySongs.length > 0} onStart={(u, m) => void startUrl(u, m)} />
+    main = (
+      <Home
+        hasSongs={displaySongs.length > 0}
+        songs={displaySongs}
+        pending={pendingMap}
+        onStart={(u, m, s) => void startUrl(u, m, s)}
+        onSelect={(id) => setActiveId(id)}
+      />
+    )
   }
 
   return (
@@ -197,7 +227,6 @@ export default function App(): React.ReactElement {
       <Sidebar
         songs={displaySongs}
         activeId={activeId}
-        busyVideoId={busyVideoId}
         pending={pendingMap}
         onSelect={(id) => setActiveId(id)}
         onDelete={(id) => void deleteSong(id)}

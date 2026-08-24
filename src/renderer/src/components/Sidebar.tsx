@@ -5,7 +5,6 @@ import { LogoMark, TrashIcon, PlusIcon } from './Icons'
 interface Props {
   songs: Song[]
   activeId: string | null
-  busyVideoId: string | null
   pending?: Record<string, { label: string; error?: boolean }>
   onSelect: (videoId: string) => void
   onDelete: (videoId: string) => void
@@ -15,7 +14,6 @@ interface Props {
 export function Sidebar({
   songs,
   activeId,
-  busyVideoId,
   pending = {},
   onSelect,
   onDelete,

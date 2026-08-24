@@ -15,7 +15,9 @@
     "typecheck:node": "node scripts/run.cjs typecheck:node",
     "typecheck:web": "node scripts/run.cjs typecheck:web",
     "typecheck": "node scripts/run.cjs typecheck",
-    "dist": "node scripts/run.cjs dist"
+    "dist": "node scripts/run.cjs dist",
+    "dist:win": "node scripts/run.cjs dist:win",
+    "dist:all": "node scripts/run.cjs dist:all"
   },
   "dependencies": {},
   "devDependencies": {
