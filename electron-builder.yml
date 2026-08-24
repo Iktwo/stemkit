@@ -1,0 +1,17 @@
+appId: com.stemkit.app
+productName: StemKit
+directories:
+  output: release
+files:
+  - out/**/*
+extraResources:
+  - from: python
+    to: python
+asar: true
+mac:
+  category: public.app-category.music
+  target:
+    - target: dmg
+      arch:
+        - arm64
+  identity: null

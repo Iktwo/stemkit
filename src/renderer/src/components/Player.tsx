@@ -1,0 +1,370 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { Song, StemId } from '../../../shared/types'
+import { engine, decodePayload, type BufferMap } from '../lib/engine'
+import { buildStemMeta } from '../lib/stems'
+import { fmtTime } from '../lib/format'
+import { YouTubeHost, type YTState } from '../lib/youtube'
+import { StemLane } from './StemLane'
+import { Transport, type PresetId } from './Transport'
+import { DownloadIcon } from './Icons'
+
+type BufferCacheMap = BufferMap
+
+const bufferCache = new Map<string, Promise<BufferCacheMap>>()
+
+function getDecoded(videoId: string): Promise<BufferCacheMap> {
+  let entry = bufferCache.get(videoId)
+  if (!entry) {
+    entry = window.stemkit
+      .getBuffers(videoId)
+      .then((payload) => decodePayload(payload))
+      .catch((err) => {
+        bufferCache.delete(videoId)
+        throw err
+      })
+    bufferCache.set(videoId, entry)
+  }
+  return entry
+}
+
+interface Props {
+  song: Song
+}
+
+export function Player({ song }: Props): React.ReactElement {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const hostRef = useRef<YouTubeHost | null>(null)
+  const posRef = useRef(0)
+  const playingRef = useRef(false)
+
+  const [ytReady, setYtReady] = useState(false)
+  const [decoding, setDecoding] = useState(true)
+  const [decodeError, setDecodeError] = useState<string | null>(null)
+  const [playing, setPlaying] = useState(false)
+  const [duration, setDuration] = useState(song.duration || 0)
+  const [bump, setBump] = useState(0)
+  const [buffers, setBuffers] = useState<BufferMap>({})
+
+  const [vols, setVols] = useState<Partial<Record<StemId, number>>>({})
+  const [mutes, setMutes] = useState<Set<StemId>>(new Set())
+  const [solos, setSolos] = useState<Set<StemId>>(new Set())
+  const [master, setMaster] = useState(0.9)
+  const [preset, setPreset] = useState<PresetId | 'custom'>('all')
+
+  const stemMeta = useMemo(() => buildStemMeta(Object.keys(buffers) as StemId[]), [buffers])
+
+  const youtubeUrl = `https://www.youtube.com/watch?v=${song.videoId}`
+  const addedLabel = new Date(song.addedAt).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric'
+  })
+
+  useEffect(() => {
+    posRef.current = 0
+    setPlaying(false)
+    playingRef.current = false
+    setYtReady(false)
+    setDecodeError(null)
+    setBuffers({})
+    setDuration(song.duration || 0)
+    setVols({})
+    setMutes(new Set())
+    setSolos(new Set())
+    setPreset('all')
+    engine.stopAll()
+
+    let cancelled = false
+    setDecoding(true)
+    getDecoded(song.videoId)
+      .then((decoded) => {
+        if (cancelled) return
+        setBuffers(decoded)
+        engine.setBuffers(decoded)
+        setVols(Object.fromEntries(Object.keys(decoded).map((id) => [id, 1])))
+        setDecoding(false)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setDecoding(false)
+        setDecodeError(err instanceof Error ? err.message : String(err))
+      })
+
+    return () => {
+      cancelled = true
+      engine.stopAll()
+      hostRef.current?.destroy()
+      hostRef.current = null
+    }
+  }, [song.videoId])
+
+  useEffect(() => {
+    if (decoding || decodeError || hostRef.current) return
+    let disposed = false
+    const container = containerRef.current
+    if (!container) return
+
+    const host = new YouTubeHost()
+    hostRef.current = host
+    void host
+      .mount(container, song.videoId, (state: YTState) => {
+        if (disposed || !engine.hasBuffers()) return
+        if (state === 'playing') {
+          engine.rate = host.rate() || 1
+          engine.setPlaying(true, host.time())
+          playingRef.current = true
+          setPlaying(true)
+        } else if (state === 'paused' || state === 'ended') {
+          const t = host.time()
+          posRef.current = t
+          engine.setPlaying(false, t)
+          playingRef.current = false
+          setPlaying(false)
+        }
+      })
+      .then(() => {
+        if (!disposed) setYtReady(true)
+      })
+
+    return () => {
+      disposed = true
+    }
+  }, [song.videoId, decoding, decodeError])
+
+  useEffect(() => {
+    engine.applyMix(vols, mutes, solos, master)
+  }, [vols, mutes, solos, master])
+
+  useEffect(() => {
+    if (!playing) return
+    let raf = 0
+    const loop = (): void => {
+      const t = hostRef.current?.time() ?? 0
+      posRef.current = engine.tick(t)
+      raf = requestAnimationFrame(loop)
+    }
+    raf = requestAnimationFrame(loop)
+    return () => cancelAnimationFrame(raf)
+  }, [playing])
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      const d = hostRef.current?.duration() ?? 0
+      if (d > 0) {
+        setDuration((prev) => (Math.abs(prev - d) > 0.5 ? d : prev))
+      }
+    }, 600)
+    return () => clearInterval(id)
+  }, [])
+
+  const togglePlay = useCallback((): void => {
+    const host = hostRef.current
+    if (!host || decoding || decodeError) return
+    if (playingRef.current) {
+      host.pause()
+    } else {
+      engine.resume()
+      host.play()
+    }
+  }, [decoding, decodeError])
+
+  const seekTo = useCallback(
+    (t: number): void => {
+      const clamped = Math.max(0, Math.min(duration > 0 ? duration - 0.05 : t, t))
+      posRef.current = clamped
+      hostRef.current?.seek(clamped)
+      engine.setPlaying(playingRef.current, clamped)
+      setBump((n) => n + 1)
+    },
+    [duration]
+  )
+
+  const getPosition = useCallback((): number => {
+    void bump
+    return posRef.current
+  }, [bump])
+
+  const exportStem = useCallback(
+    (stem: string): void => {
+      void window.stemkit.exportStem(song.videoId, stem)
+    },
+    [song.videoId]
+  )
+
+  const exportAllStems = useCallback((): void => {
+    void window.stemkit.exportAllStems(song.videoId)
+  }, [song.videoId])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.code === 'Space' && !(e.target instanceof HTMLInputElement)) {
+        e.preventDefault()
+        togglePlay()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [togglePlay])
+
+  const applyPreset = (p: PresetId): void => {
+    setPreset(p)
+    setMutes(new Set())
+    if (p === 'all') setSolos(new Set())
+    else if (p === 'karaoke')
+      setSolos(new Set<StemId>(stemMeta.filter((s) => s.id !== 'vocals').map((s) => s.id)))
+    else if (p === 'acapella') setSolos(new Set<StemId>(['vocals']))
+    else if (p === 'drumnbass') setSolos(new Set<StemId>(['drums', 'bass']))
+  }
+
+  const toggleMute = (id: StemId): void => {
+    setPreset('custom')
+    setSolos(new Set())
+    setMutes((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const toggleSolo = (id: StemId): void => {
+    setPreset('custom')
+    setMutes(new Set())
+    setSolos((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  return (
+    <div className="h-full flex flex-col">
+      <header className="drag-region h-14 shrink-0 flex items-center justify-between px-6">
+        <h2 className="text-sm font-semibold truncate max-w-md">{song.title}</h2>
+        <span className="text-[11px] text-white/30 font-medium tracking-wide uppercase">
+          {ytReady && !decoding ? 'synced to youtube · local stems' : ''}
+        </span>
+      </header>
+
+      <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-6">
+        <div className="max-w-6xl mx-auto">
+          <div className="flex items-start gap-5">
+            <div className="relative w-full max-w-xl shrink">
+              <div className="absolute -inset-6 bg-violet-500/10 blur-3xl rounded-full pointer-events-none" />
+              <div className="relative aspect-video rounded-2xl overflow-hidden ring-1 ring-white/10 bg-black shadow-2xl shadow-black/60">
+                <div ref={containerRef} className="absolute inset-0 [&_iframe]:w-full [&_iframe]:h-full" />
+                {!ytReady && (
+                  <div className="absolute inset-0 flex items-center justify-center animate-pulse">
+                    <span className="text-xs text-white/40 tracking-widest uppercase">loading video…</span>
+                  </div>
+                )}
+                {(decoding || decodeError) && (
+                  <div className="absolute inset-x-4 bottom-4 flex justify-center rise-in">
+                    <div className={`glass rounded-xl px-4 py-2 text-sm ${decodeError ? 'text-rose-300' : ''}`}>
+                      {decodeError ?? (
+                        <span className="flex items-center gap-2">
+                          <span className="w-3 h-3 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                          decoding stems…
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <aside className="flex-1 min-w-0 glass rounded-2xl p-5 rise-in">
+              <div className="flex gap-4">
+                <img
+                  src={`https://i.ytimg.com/vi/${song.videoId}/mqdefault.jpg`}
+                  alt=""
+                  className="w-28 h-[63px] rounded-lg object-cover bg-white/5 shrink-0"
+                  draggable={false}
+                />
+                <div className="min-w-0">
+                  <h3 className="text-[15px] font-semibold leading-snug line-clamp-2">{song.title}</h3>
+                  <p className="text-xs text-white/40 mt-1.5 font-mono">
+                    {fmtTime(song.duration)} · added {addedLabel}
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4 flex items-center gap-2 flex-wrap">
+                <span className="text-[11px] px-2.5 py-1 rounded-full bg-violet-400/15 text-violet-200 font-medium">
+                  {song.model === 'htdemucs_6s' ? 'Extended · 6-stem model' : 'Standard · 4-stem model'}
+                </span>
+                <span className="text-[11px] px-2.5 py-1 rounded-full bg-white/5 text-white/50 font-medium">
+                  {stemMeta.length} stems
+                </span>
+              </div>
+
+              <div className="mt-5">
+                <span className="text-[11px] font-semibold uppercase tracking-widest text-white/30">Stems</span>
+                <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5">
+                  {stemMeta.map((meta) => (
+                    <span key={meta.id} className="flex items-center gap-2 text-[13px] text-white/70">
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: meta.color }} />
+                      <span className="capitalize">{meta.label}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-5 grid grid-cols-2 gap-2">
+                <button
+                  onClick={exportAllStems}
+                  disabled={decoding || !!decodeError}
+                  className="no-drag glass rounded-xl px-4 py-2.5 text-[13px] text-white/70 hover:text-white hover:bg-white/10 transition-colors flex items-center justify-center gap-2 disabled:opacity-40"
+                >
+                  <DownloadIcon className="w-3.5 h-3.5" />
+                  Export all
+                </button>
+                <button
+                  onClick={() => window.stemkit.openExternal(youtubeUrl)}
+                  className="no-drag glass rounded-xl px-4 py-2.5 text-[13px] text-white/70 hover:text-white hover:bg-white/10 transition-colors text-center"
+                >
+                  YouTube
+                </button>
+              </div>
+            </aside>
+          </div>
+
+          <Transport
+            playing={playing}
+            duration={duration}
+            getPosition={getPosition}
+            onTogglePlay={togglePlay}
+            onSeek={seekTo}
+            preset={preset === 'custom' ? 'all' : preset}
+            onPreset={applyPreset}
+            master={master}
+            onMaster={setMaster}
+            youtubeUrl={youtubeUrl}
+          />
+
+          <div className="mt-4 space-y-2">
+            {stemMeta.map((meta) => (
+              <StemLane
+                key={meta.id}
+                meta={meta}
+                buffer={buffers[meta.id] ?? null}
+                duration={duration}
+                getPosition={getPosition}
+                audible={!mutes.has(meta.id) && (solos.size === 0 || solos.has(meta.id))}
+                volume={vols[meta.id] ?? 1}
+                muted={mutes.has(meta.id)}
+                soloed={solos.has(meta.id)}
+                onToggleMute={() => toggleMute(meta.id)}
+                onToggleSolo={() => toggleSolo(meta.id)}
+                onVolume={(v) => setVols((prev) => ({ ...prev, [meta.id]: v }))}
+                onSeek={seekTo}
+                onExport={() => exportStem(meta.id)}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
