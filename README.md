@@ -24,7 +24,9 @@ Grab installers from [Releases](https://github.com/danielravina/stemkit/releases
 
 First launch creates a private Python environment and downloads the separation engine (~2 GB, one time) plus model weights (~80 MB). ffmpeg is bundled — nothing else to install.
 
-> Unsigned builds: macOS requires right-click → Open on first run; Windows SmartScreen shows a warning.
+> **macOS first launch**: builds are signed with a Developer ID but not notarized, so macOS may say it "cannot verify the developer". One-time fix: **System Settings → Privacy & Security → Open Anyway** (or `xattr -cr /Applications/StemKit.app`).
+>
+> **Windows**: SmartScreen may warn on first run — "More info → Run anyway".
 
 ## Requirements
 
@@ -55,6 +57,20 @@ npm run dist:all    # both (on the matching OS)
 Releases are built by GitHub Actions:
 - push a tag `v*` → binaries attach to a draft GitHub Release
 - `workflow_dispatch` ("Run workflow") → on-demand artifacts on the run page
+
+macOS builds are Developer-ID-signed automatically when the cert is available in the CI/agent keychain. To also **notarize** (removes the one-time "Open Anyway" step), add repo secrets `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD` — electron-builder picks them up automatically.
+
+### Signing in CI (one-time setup)
+
+Local builds sign with your keychain cert automatically. CI runners have empty keychains, so hand them the certificate via repo **secrets**:
+
+1. Keychain Access → My Certificates → right-click `Developer ID Application: ...` → Export → `.p12` (set an export password)
+2. Base64 it and add these repo secrets:
+   - `CSC_MAC_P12` — the base64 string: `base64 -i developer-id.p12 | pbcopy`
+   - `CSC_MAC_PASSWORD` — the export password from step 1
+3. Optional (full notarization, zero Gatekeeper prompts): also add `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`
+
+Without these secrets CI falls back to ad-hoc signing (app runs, but Gatekeeper complains on download).
 
 ## How it works
 
