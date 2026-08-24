@@ -296,8 +296,8 @@ export function Player({ song }: Props): React.ReactElement {
 
       <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-6">
         <div className="max-w-6xl mx-auto">
-          <div className="flex items-stretch gap-4 h-[200px]">
-            <div className="relative w-[356px] shrink-0">
+          <div className="flex items-stretch gap-4 h-[220px]">
+            <div className="relative w-[391px] shrink-0">
               <div className="absolute -inset-4 bg-violet-500/10 blur-3xl rounded-full pointer-events-none" />
               <div className="absolute inset-0 rounded-xl overflow-hidden ring-1 ring-white/10 bg-black shadow-2xl shadow-black/60">
                 <div ref={containerRef} className="absolute inset-0 [&_iframe]:w-full [&_iframe]:h-full" />
@@ -316,47 +316,49 @@ export function Player({ song }: Props): React.ReactElement {
               </div>
             </div>
 
-            <aside className="flex-1 min-w-0 glass rounded-2xl px-5 py-4 rise-in flex flex-col justify-center gap-3">
-              <div className="flex items-center gap-3.5">
+            <aside className="flex-1 min-w-0 glass rounded-2xl px-6 py-5 rise-in flex flex-col justify-between">
+              <div className="flex items-center gap-4">
                 <img
                   src={`https://i.ytimg.com/vi/${song.videoId}/mqdefault.jpg`}
                   alt=""
-                  className="w-16 h-9 rounded-md object-cover bg-white/5 shrink-0"
+                  className="w-32 h-[72px] rounded-lg object-cover bg-white/5 shrink-0"
                   draggable={false}
                 />
                 <div className="min-w-0 flex-1">
-                  <h3 className="text-[14px] font-semibold leading-snug truncate">{song.title}</h3>
-                  <p className="text-[11px] text-white/40 mt-0.5 font-mono truncate">
+                  <h3 className="text-xl font-semibold leading-snug truncate">{song.title}</h3>
+                  <p className="text-xs text-white/45 mt-1.5 font-mono truncate">
                     {fmtTime(song.duration)} · added {addedLabel} ·{' '}
                     {song.model === 'htdemucs_6s' ? '6-source engine' : '4-source engine'}
                   </p>
                 </div>
-                <span className="shrink-0 text-[11px] px-2.5 py-1 rounded-full bg-white/5 text-white/50 font-medium">
+                <span className="shrink-0 text-xs px-3 py-1.5 rounded-full bg-white/5 text-white/50 font-medium">
                   {stemMeta.length} stems
                 </span>
               </div>
 
-              <div className="mt-3 flex items-center gap-x-4 gap-y-1.5 flex-wrap">
+              <div className="flex items-center gap-x-6 gap-y-2 flex-wrap">
                 {stemMeta.map((meta) => (
-                  <span key={meta.id} className="flex items-center gap-1.5 text-[12px] text-white/70">
-                    <span className="w-2 h-2 rounded-full shrink-0" style={{ background: meta.color }} />
+                  <span key={meta.id} className="flex items-center gap-2 text-[14px] text-white/75">
+                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: meta.color }} />
                     <span className="capitalize">{meta.label}</span>
                   </span>
                 ))}
-                <span className="flex-1" />
+              </div>
+
+              <div className="flex items-center gap-3">
                 <button
                   onClick={exportAllStems}
                   disabled={decoding || !!decodeError}
-                  className="no-drag glass rounded-lg px-3 py-2 text-[12px] text-white/70 hover:text-white hover:bg-white/10 transition-colors flex items-center gap-1.5 disabled:opacity-40"
+                  className="no-drag glass rounded-xl px-5 py-3 text-[13px] font-medium text-white/70 hover:text-white hover:bg-white/10 transition-colors flex items-center gap-2 disabled:opacity-40"
                 >
-                  <DownloadIcon className="w-3.5 h-3.5" />
-                  Export all
+                  <DownloadIcon className="w-4 h-4" />
+                  Export all stems
                 </button>
                 <button
                   onClick={() => window.stemkit.openExternal(youtubeUrl)}
-                  className="no-drag glass rounded-lg px-3 py-2 text-[12px] text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+                  className="no-drag glass rounded-xl px-5 py-3 text-[13px] font-medium text-white/70 hover:text-white hover:bg-white/10 transition-colors"
                 >
-                  YouTube
+                  Open on YouTube
                 </button>
               </div>
             </aside>
