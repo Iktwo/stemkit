@@ -50,27 +50,42 @@ jobs:
       - name: Build app bundles
         run: npx electron-vite build
 
+      - name: Resolve signing secrets
+        if: matrix.platform == 'mac'
+        env:
+          P12_B64: ${{ secrets.CSC_MAC_P12 }}
+          P12_PASS: ${{ secrets.CSC_MAC_PASSWORD }}
+          APPLE_ID_S: ${{ secrets.APPLE_ID }}
+          APPLE_PW_S: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_S: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$P12_B64" ]; then
+            echo "CSC_LINK=$P12_B64" >> "$GITHUB_ENV"
+            echo "CSC_KEY_PASSWORD=$P12_PASS" >> "$GITHUB_ENV"
+            echo "Developer ID signing enabled"
+          else
+            echo "CSC_MAC_P12 secret not set — falling back to ad-hoc signing"
+          fi
+          if [ -n "$APPLE_ID_S" ]; then
+            echo "APPLE_ID=$APPLE_ID_S" >> "$GITHUB_ENV"
+            echo "APPLE_APP_SPECIFIC_PASSWORD=$APPLE_PW_S" >> "$GITHUB_ENV"
+            echo "APPLE_TEAM_ID=$APPLE_TEAM_S" >> "$GITHUB_ENV"
+            echo "Notarization enabled"
+          else
+            echo "APPLE_ID secret not set — skipping notarization"
+          fi
+
       - name: Package (release)
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-          CSC_LINK: ${{ secrets.CSC_MAC_P12 }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_MAC_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npx electron-builder --${{ matrix.platform }} --publish always
 
       - name: Package (on demand)
         if: github.event_name == 'workflow_dispatch'
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-          CSC_LINK: ${{ secrets.CSC_MAC_P12 }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_MAC_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npx electron-builder --${{ matrix.platform }} --publish never
 
       - name: Upload artifacts
