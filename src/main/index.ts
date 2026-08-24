@@ -1,6 +1,8 @@
 import { app, BrowserWindow, ipcMain, shell, dialog } from 'electron'
-import { join } from 'path'
-import { existsSync, copyFileSync, mkdirSync } from 'fs'
+import { join, normalize, extname } from 'path'
+import { existsSync, copyFileSync, mkdirSync, createReadStream, statSync } from 'fs'
+import { createServer, type Server } from 'http'
+import type { AddressInfo } from 'net'
 import {
   detectTools,
   bootstrap,
@@ -12,13 +14,58 @@ import { loadSongs, removeSong, stemBuffers, stemsDir, stemsFor } from './librar
 import { startJob, cancelJob, searchYouTube } from './pipeline'
 
 let mainWindow: BrowserWindow | null = null
+let staticServer: Server | null = null
+
+const MIME: Record<string, string> = {
+  '.html': 'text/html',
+  '.js': 'text/javascript',
+  '.mjs': 'text/javascript',
+  '.css': 'text/css',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.ico': 'image/x-icon',
+  '.json': 'application/json',
+  '.woff2': 'font/woff2',
+  '.map': 'application/json'
+}
+
+function startRendererServer(): Promise<string> {
+  const root = normalize(join(__dirname, '../renderer'))
+  return new Promise((resolve, reject) => {
+    const server = createServer((req, res) => {
+      try {
+        const urlPath = decodeURIComponent((req.url || '/').split('?')[0])
+        let filePath = normalize(join(root, urlPath === '/' ? 'index.html' : urlPath))
+        if (!filePath.startsWith(root)) {
+          res.statusCode = 403
+          res.end()
+          return
+        }
+        if (!existsSync(filePath) || statSync(filePath).isDirectory()) {
+          filePath = join(root, 'index.html')
+        }
+        res.setHeader('Content-Type', MIME[extname(filePath)] ?? 'application/octet-stream')
+        createReadStream(filePath).pipe(res)
+      } catch {
+        res.statusCode = 404
+        res.end()
+      }
+    })
+    server.on('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      staticServer = server
+      resolve(`http://127.0.0.1:${(server.address() as AddressInfo).port}`)
+    })
+  })
+}
 
 function sanitizeName(name: string): string {
   const clean = name.replace(/[\\/:*?"<>|]/g, '-').trim()
   return clean.length > 0 ? clean.slice(0, 120) : 'stems'
 }
 
-function createWindow(): void {
+async function createWindow(): Promise<void> {
   mainWindow = new BrowserWindow({
     width: 1360,
     height: 860,
@@ -48,7 +95,8 @@ function createWindow(): void {
   if (!app.isPackaged && process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    const url = await startRendererServer()
+    mainWindow.loadURL(url + '/index.html')
   }
 }
 
@@ -123,14 +171,15 @@ app.whenReady().then(async () => {
   })
 
   await detectTools()
-  createWindow()
+  await createWindow()
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (BrowserWindow.getAllWindows().length === 0) void createWindow()
   })
 })
 
 app.on('window-all-closed', () => {
   cancelJob()
+  staticServer?.close()
   app.quit()
 })
