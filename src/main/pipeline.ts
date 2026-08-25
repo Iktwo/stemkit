@@ -177,7 +177,7 @@ export async function startJob(
 
     progress(job, 'convert', 0, 'Converting to WAV')
     const ffmpeg = getStatus().ffmpeg.path
-    if (!ffmpeg) bail('ffmpeg not found — install it with: brew install ffmpeg')
+    if (!ffmpeg) bail('Something went wrong with the built-in audio tools. Try reinstalling StemKit.')
     await runProcess(job, ffmpeg as string, [
       '-y',
       '-i',

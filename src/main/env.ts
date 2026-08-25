@@ -360,9 +360,9 @@ export async function ensureRuntimePython(): Promise<boolean> {
   if (existsSync(runtimePython())) return true
   try {
     const archive = runtimeArchivePath()
-    sendEnvEvent('Downloading a private Python runtime (~35MB)')
-    await downloadTo(runtimeDownloadUrl(), archive, 'python')
-    sendEnvEvent('Unpacking python runtime')
+    sendEnvEvent('Downloading components (~35MB)')
+    await downloadTo(runtimeDownloadUrl(), archive, 'components')
+    sendEnvEvent('Unpacking components')
     await extractArchive(archive, runtimeDir())
     unlinkSync(archive)
     if (!existsSync(runtimePython())) throw new Error('runtime python missing after extract')
@@ -373,7 +373,7 @@ export async function ensureRuntimePython(): Promise<boolean> {
     return true
   } catch (err) {
     sendEnvEvent(
-      `python runtime setup failed: ${err instanceof Error ? err.message : String(err)}`,
+      `Setup failed: ${err instanceof Error ? err.message : String(err)}`,
       'error'
     )
     try {
@@ -403,7 +403,7 @@ export async function bootstrap(): Promise<boolean> {
     const venv = venvDir()
     const pip = venvPip()
 
-    sendEnvEvent(`Creating virtual environment with ${state.python.path}`)
+    sendEnvEvent('Preparing workspace')
     await new Promise<void>((resolve, reject) => {
       const child = spawn(state.python.path as string, ['-m', 'venv', venv])
       child.on('close', (code) =>
@@ -412,7 +412,6 @@ export async function bootstrap(): Promise<boolean> {
       child.on('error', reject)
     })
 
-    sendEnvEvent('Upgrading pip')
     await new Promise<void>((resolve, reject) => {
       const child = spawn(pip, ['install', '-q', '-U', 'pip', 'wheel', 'setuptools'])
       child.on('close', (code) =>
@@ -421,7 +420,8 @@ export async function bootstrap(): Promise<boolean> {
       child.on('error', reject)
     })
 
-    sendEnvEvent('Installing demucs + torch (~2GB, one time only). Grab a coffee.')
+    sendEnvEvent('Downloading the separation engine (~2GB, one time) — grab a coffee')
+    let lastGeneric = 0
     await new Promise<void>((resolve, reject) => {
       const child = spawn(pip, [
         'install',
@@ -440,9 +440,16 @@ export async function bootstrap(): Promise<boolean> {
         buffer = lines.pop() ?? ''
         for (const line of lines) {
           const t = line.trim()
-          if (t && !t.startsWith('Looking in') && !t.startsWith('Using cached')) {
-            sendEnvEvent(t.length > 120 ? t.slice(0, 117) + '...' : t)
+          if (!t || /^(Looking in|Using cached)/.test(t)) continue
+          if (/^(Collecting|Downloading|Installing collected|Successfully installed)/i.test(t)) {
+            const now = Date.now()
+            if (now - lastGeneric > 8000) {
+              lastGeneric = now
+              sendEnvEvent('Still downloading — this happens only once')
+            }
+            continue
           }
+          sendEnvEvent(t.length > 120 ? t.slice(0, 117) + '...' : t)
         }
       })
       child.stderr?.on('data', (chunk: Buffer) => {
@@ -455,7 +462,6 @@ export async function bootstrap(): Promise<boolean> {
       child.on('error', reject)
     })
 
-    sendEnvEvent('Installing yt-dlp challenge solver')
     await new Promise<void>((resolve, reject) => {
       const child = spawn(pip, ['install', '-q', 'yt-dlp-ejs'])
       child.on('close', (code) =>

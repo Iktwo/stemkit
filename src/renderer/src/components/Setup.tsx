@@ -15,19 +15,6 @@ export function Setup({ status, logs, onInstall }: Props): React.ReactElement {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight })
   }, [logs])
 
-  const checks = [
-    {
-      ok: status.python.found,
-      label: 'Python 3',
-      detail: status.python.path ?? 'not installed — StemKit will fetch its own (~35MB)'
-    },
-    {
-      ok: status.ffmpeg.found,
-      label: 'ffmpeg',
-      detail: status.ffmpeg.path ?? 'not found — bundled with StemKit'
-    }
-  ]
-
   return (
     <div className="h-full flex items-center justify-center px-8">
       <div className="w-full max-w-lg rise-in">
@@ -36,35 +23,17 @@ export function Setup({ status, logs, onInstall }: Props): React.ReactElement {
           <h1 className="text-xl font-bold tracking-tight">Welcome to StemKit</h1>
         </div>
         <p className="text-center text-white/45 text-sm mt-3 leading-relaxed">
-          One-time setup fetches everything StemKit needs — its own Python if
-          you don&apos;t have one, plus the separation engine.
+          One-time setup downloads the separation engine (~2 GB).
           <br />
-          Everything runs locally after that.
+          After that everything works offline, right on your machine.
         </p>
-
-        <div className="mt-7 space-y-2">
-          {checks.map((c) => (
-            <div key={c.label} className="glass rounded-xl px-4 py-3 flex items-center gap-3">
-              <span
-                className={`w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold ${
-                  c.ok ? 'bg-emerald-400 text-black' : 'bg-white/10 text-white/40'
-                }`}
-              >
-                {c.ok ? '✓' : '·'}
-              </span>
-              <span className="text-sm font-medium w-20">{c.label}</span>
-              <span className="text-xs text-white/35 truncate font-mono">{c.detail}</span>
-            </div>
-          ))}
-        </div>
 
         {!status.bootstrapping && (
           <button
             onClick={onInstall}
-            disabled={!status.ffmpeg.found}
-            className="mt-6 w-full py-3.5 rounded-xl bg-white text-black font-semibold text-sm hover:bg-white/90 active:scale-[0.99] transition-all disabled:opacity-40 disabled:hover:bg-white"
+            className="mt-7 w-full py-3.5 rounded-xl bg-white text-black font-semibold text-sm hover:bg-white/90 active:scale-[0.99] transition-all"
           >
-            Install separation engine · ~2 GB, one time
+            Get started · ~2 GB, once
           </button>
         )}
 
