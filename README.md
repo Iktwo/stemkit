@@ -71,7 +71,7 @@ Local builds sign with your keychain cert automatically. CI runners have empty k
 2. Base64 it and add these repo secrets:
    - `CSC_MAC_P12` — the base64 string: `base64 -i developer-id.p12 | pbcopy`
    - `CSC_MAC_PASSWORD` — the export password from step 1
-3. Optional (full notarization, zero Gatekeeper prompts): also add `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`
+3. Optional (full notarization, zero Gatekeeper prompts): add `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` **and** set repo variable `ENABLE_NOTARIZATION` to `true` (Settings → Secrets and variables → Actions → Variables). Requires an **active** Apple Developer membership — Apple's notary service rejects expired accounts.
 
 Without these secrets CI falls back to ad-hoc signing (app runs, but Gatekeeper complains on download).
 
