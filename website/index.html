@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>StemKit — split any YouTube song into stems</title>
+  <meta name="description" content="Free and open source. Paste a YouTube link, pick your instruments, and play vocals, drums, bass, guitar and piano as synced stems. Runs entirely on your machine." />
+  <meta property="og:title" content="StemKit — split any YouTube song into stems" />
+  <meta property="og:description" content="Free and open source. Runs entirely on your machine. Karaoke, acapellas and instrumentals, one click away." />
+  <meta property="og:image" content="https://stemkit.pages.dev/screenshot.jpg" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <link rel="icon" type="image/png" href="icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0b0b10;
+      --text: #e7e7ef;
+      --muted: rgba(231, 231, 231, 0.5);
+      --faint: rgba(231, 231, 231, 0.32);
+      --line: rgba(255, 255, 255, 0.09);
+      --panel: rgba(255, 255, 255, 0.035);
+      --violet: #a78bfa;
+      --emerald: #34d399;
+      --amber: #fbbf24;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      background:
+        radial-gradient(1100px 520px at 82% -8%, rgba(124, 58, 237, 0.14), transparent 62%),
+        radial-gradient(900px 480px at -8% 30%, rgba(16, 185, 129, 0.07), transparent 60%),
+        radial-gradient(800px 500px at 60% 110%, rgba(124, 58, 237, 0.08), transparent 60%),
+        var(--bg);
+      color: var(--text);
+      font-family: "Space Grotesk", ui-sans-serif, system-ui, -apple-system, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+    .wrap { max-width: 1120px; margin: 0 auto; padding: 0 28px; }
+    .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+
+    /* nav */
+    nav {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 26px 0;
+    }
+    .brand { display: flex; align-items: center; gap: 11px; text-decoration: none; color: var(--text); }
+    .brand img { width: 30px; height: 30px; border-radius: 8px; }
+    .brand span { font-size: 17px; font-weight: 600; letter-spacing: -0.02em; }
+    nav .right { display: flex; align-items: center; gap: 22px; }
+    nav .right a {
+      color: var(--muted); text-decoration: none; font-size: 14.5px;
+      transition: color 0.15s;
+    }
+    nav .right a:hover { color: var(--text); }
+    nav .right a.gh { display: flex; align-items: center; gap: 7px; }
+    nav .right svg { width: 17px; height: 17px; fill: currentColor; }
+
+    /* hero */
+    .hero { text-align: center; padding: 84px 0 0; }
+    .hero h1 {
+      font-size: clamp(2.7rem, 6.4vw, 4.6rem);
+      font-weight: 700; letter-spacing: -0.035em; line-height: 1.04;
+      max-width: 820px; margin: 0 auto;
+    }
+    .hero h1 .grad {
+      background: linear-gradient(100deg, var(--violet) 0%, #e7e7ef 50%, var(--emerald) 100%);
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+    }
+    .hero .sub {
+      margin: 26px auto 0; max-width: 520px;
+      color: var(--muted); font-size: 18px; line-height: 1.55;
+    }
+    .cta { margin-top: 38px; display: flex; align-items: center; justify-content: center; gap: 14px; flex-wrap: wrap; }
+    .btn-dl {
+      display: inline-flex; align-items: center; gap: 10px;
+      background: #fff; color: #0b0b10;
+      padding: 15px 30px; border-radius: 999px;
+      font-size: 15.5px; font-weight: 600; text-decoration: none;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+      box-shadow: 0 0 0 rgba(167, 139, 250, 0);
+    }
+    .btn-dl:hover { transform: translateY(-2px); box-shadow: 0 12px 40px rgba(167, 139, 250, 0.35); }
+    .btn-dl svg { width: 17px; height: 17px; stroke: currentColor; fill: none; stroke-width: 2; }
+    .btn-ghost {
+      display: inline-flex; align-items: center;
+      color: var(--muted); text-decoration: none; font-size: 14.5px;
+      padding: 15px 8px; transition: color 0.15s;
+    }
+    .btn-ghost:hover { color: var(--text); }
+    .dl-cap {
+      margin-top: 16px; font-size: 12.5px; color: var(--faint);
+      font-family: "JetBrains Mono", monospace;
+    }
+
+    /* media frames */
+    .frame {
+      position: relative; margin-top: 64px;
+      border-radius: 18px; overflow: hidden;
+      border: 1px solid var(--line);
+      box-shadow: 0 40px 90px rgba(0, 0, 0, 0.55);
+      background: #101016;
+    }
+    .frame::before {
+      content: ""; position: absolute; inset: -1px; z-index: -1;
+      background: linear-gradient(120deg, rgba(167, 139, 250, 0.35), rgba(52, 211, 153, 0.25));
+      filter: blur(46px); opacity: 0.5; border-radius: 24px;
+    }
+    .frame img, .frame video { display: block; width: 100%; height: auto; }
+
+    /* sections */
+    section { padding: 110px 0 0; }
+    .kicker {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 12px; letter-spacing: 0.22em; text-transform: uppercase;
+      color: var(--violet); margin-bottom: 16px;
+    }
+    .kicker.green { color: var(--emerald); }
+    .kicker.amber { color: var(--amber); }
+    h2 { font-size: clamp(1.7rem, 3.4vw, 2.5rem); font-weight: 600; letter-spacing: -0.03em; }
+    .lede { color: var(--muted); font-size: 16.5px; margin-top: 14px; max-width: 560px; line-height: 1.6; }
+
+    /* steps */
+    .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 40px; margin-top: 56px; }
+    .step { border-top: 1px solid var(--line); padding-top: 26px; }
+    .step .n { font-family: "JetBrains Mono", monospace; font-size: 13px; color: var(--faint); }
+    .step h3 { font-size: 19px; font-weight: 600; letter-spacing: -0.02em; margin: 14px 0 10px; }
+    .step p { color: var(--muted); font-size: 14.5px; line-height: 1.6; }
+
+    /* stem strip */
+    .strip-wrap { margin-top: 60px; display: flex; flex-direction: column; align-items: center; gap: 22px; }
+    .strip { display: flex; align-items: flex-end; gap: 15px; height: 104px; }
+    .strip i { display: block; width: 11px; border-radius: 999px; transition: transform 0.25s ease; }
+    .strip i:hover { transform: scaleY(1.08); }
+    .strip-cap { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--faint); letter-spacing: 0.14em; }
+
+    /* media slots */
+    .slot {
+      margin-top: 40px;
+      border: 1px dashed rgba(255, 255, 255, 0.18);
+      border-radius: 16px;
+      background: var(--panel);
+      padding: 40px 44px;
+      display: flex; flex-direction: column; gap: 16px;
+    }
+    .slot-file {
+      align-self: flex-start;
+      font-family: "JetBrains Mono", monospace; font-size: 12.5px;
+      background: rgba(255, 255, 255, 0.06); border-radius: 6px;
+      padding: 5px 10px; color: var(--violet);
+    }
+    .slot p { color: var(--muted); font-size: 15px; line-height: 1.65; max-width: 640px; }
+    .slot p strong { color: var(--text); font-weight: 600; }
+    .slot-spec {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 11.5px; color: var(--faint); letter-spacing: 0.04em;
+      border-top: 1px solid var(--line); padding-top: 14px;
+    }
+
+    /* details */
+    .facts { display: grid; grid-template-columns: 1fr 1fr; gap: 0 60px; margin-top: 50px; }
+    .fact { border-top: 1px solid var(--line); padding: 22px 0 26px; }
+    .fact dt { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+    .fact dd { color: var(--muted); font-size: 14px; line-height: 1.6; margin-top: 8px; }
+
+    /* buttons row in footer-ish cta */
+    .end { text-align: center; padding: 130px 0 0; }
+    .end h2 { max-width: 640px; margin: 0 auto; }
+    .end .cta { margin-top: 34px; }
+
+    footer {
+      margin-top: 130px; border-top: 1px solid var(--line);
+      padding: 34px 0 44px;
+      display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap;
+    }
+    footer .note { color: var(--faint); font-size: 12.5px; }
+    footer .links { display: flex; gap: 22px; }
+    footer .links a { color: var(--muted); text-decoration: none; font-size: 13px; transition: color 0.15s; }
+    footer .links a:hover { color: var(--text); }
+
+    @media (max-width: 820px) {
+      .steps, .facts { grid-template-columns: 1fr; }
+      .hero { padding-top: 56px; }
+      section { padding-top: 84px; }
+      .slot { padding: 28px 24px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <nav>
+      <a class="brand" href="/">
+        <img src="icon.png" alt="StemKit icon" />
+        <span>StemKit</span>
+      </a>
+      <div class="right">
+        <a class="gh" href="https://github.com/danielravina/stemkit" target="_blank" rel="noopener">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+          GitHub
+        </a>
+        <a href="https://github.com/danielravina/stemkit/releases" target="_blank" rel="noopener">Releases</a>
+      </div>
+    </nav>
+
+    <header class="hero">
+      <h1>Split any YouTube song into <span class="grad">stems</span>.</h1>
+      <p class="sub">Paste a link, pick your instruments, and play vocals, drums, bass, guitar and piano as synced tracks. Free and open source. Runs entirely on your machine.</p>
+      <div class="cta">
+        <a class="btn-dl" id="dl" href="https://github.com/danielravina/stemkit/releases/latest">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span id="dl-label">Download</span>
+        </a>
+        <a class="btn-ghost" href="https://github.com/danielravina/stemkit/releases" target="_blank" rel="noopener">All releases</a>
+      </div>
+      <p class="dl-cap" id="dl-cap">fetching the latest release…</p>
+    </header>
+
+    <div class="frame">
+      <img src="screenshot.jpg" alt="StemKit splitting Bohemian Rhapsody into six stems: video player, presets, and color-coded waveform lanes" />
+    </div>
+
+    <!--
+      MEDIA SLOT 1 of 4 · hero flow capture
+      When ready, drop the file in website/media/flow.mp4 and replace the <img> above with:
+      <video src="media/flow.mp4" autoplay muted loop playsinline></video>
+      Brief: Start on the Home screen. Paste the Bohemian Rhapsody URL, hit Split. Let the sidebar
+      show downloading → separating for a few seconds, then jump-cut to the finished song opening
+      in the player with all six stems appearing. End on one second of playback. 10–15s, cursor visible.
+    -->
+
+    <section>
+      <p class="kicker">How it works</p>
+      <h2>Three steps. No accounts, no uploads.</h2>
+      <div class="steps">
+        <div class="step">
+          <span class="n">01</span>
+          <h3>Paste a link, or search</h3>
+          <p>YouTube search is built in. Pick a track without ever opening a browser tab.</p>
+        </div>
+        <div class="step">
+          <span class="n">02</span>
+          <h3>Pick your instruments</h3>
+          <p>Vocals, drums, bass, other, plus guitar and piano. Only what you ask for gets produced.</p>
+        </div>
+        <div class="step">
+          <span class="n">03</span>
+          <h3>Play, mute, solo, export</h3>
+          <p>Stems play synced with the video. Karaoke and acapella are presets, not projects.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <p class="kicker green">The karaoke moment</p>
+      <h2>Every song, minus the singer.</h2>
+      <p class="lede">One preset click removes the vocals from any track. Or flip it: solo the voice and nothing else. Instrumentals and acapellas, straight from the original mix.</p>
+
+      <!--
+        MEDIA SLOT 2 of 4 · media/karaoke.mp4
+        Brief: Play Billie Jean from ~0:30 with vocals audible. Click the Karaoke preset. Vocals drop
+        dead. Let it play 3 more seconds. 5–8s seamless loop.
+      -->
+      <div class="slot">
+        <span class="slot-file">media/karaoke.mp4</span>
+        <p>Placeholder. Record: play <strong>Billie Jean</strong> from about 0:30 with the vocals audible, click the <strong>Karaoke</strong> preset, let the vocals drop dead, keep playing for three more seconds. Seamless loop, 5 to 8 seconds.</p>
+        <span class="slot-spec">MP4 · H.264 · 30fps · no audio · ≤ 6MB · window at 1280×800 · cursor visible</span>
+      </div>
+    </section>
+
+    <section>
+      <p class="kicker amber">Built like a DAW</p>
+      <h2>The audio leads. The video follows.</h2>
+      <p class="lede">Click anywhere on any waveform and the stems land on the exact sample, instantly. The video catches up on its own. Scrubbing feels like an instrument, not a spinner.</p>
+
+      <!--
+        MEDIA SLOT 3 of 4 · media/scrub.mp4
+        Brief: While a track plays, click three different spots on the vocal waveform one after
+        another. Stems jump instantly, video follows. Finish by dragging one stem's volume slider.
+        5–8s loop.
+      -->
+      <div class="slot">
+        <span class="slot-file">media/scrub.mp4</span>
+        <p>Placeholder. Record: while a track plays, click three different spots on the <strong>vocal waveform</strong> in a row, then drag one stem's volume slider. Stems jump instantly, the video follows. 5 to 8 second loop.</p>
+        <span class="slot-spec">MP4 · H.264 · 30fps · no audio · ≤ 6MB · window at 1280×800 · cursor visible</span>
+      </div>
+    </section>
+
+    <section>
+      <p class="kicker">Search to stems</p>
+      <h2>From a thought to six tracks in minutes.</h2>
+      <p class="lede">Search YouTube without opening a tab. Splits run in the background with live progress, and finished songs reopen from the library instantly.</p>
+
+      <!--
+        MEDIA SLOT 4 of 4 · media/search.mp4
+        Brief: Type "bohemian rhapsody" in the search box, results appear, click the top one, sidebar
+        runs the live stage labels, song lands in the library. 8–10s.
+      -->
+      <div class="slot">
+        <span class="slot-file">media/search.mp4</span>
+        <p>Placeholder. Record: type <strong>"bohemian rhapsody"</strong> in the search box, click the top result, let the sidebar run its live stage labels, then open the finished song from the library. 8 to 10 seconds.</p>
+        <span class="slot-spec">MP4 · H.264 · 30fps · no audio · ≤ 6MB · window at 1280×800 · cursor visible</span>
+      </div>
+    </section>
+
+    <div class="strip-wrap">
+      <div class="strip" aria-hidden="true">
+        <i style="height: 56px;  background: #a78bfa;"></i>
+        <i style="height: 92px;  background: #f87171;"></i>
+        <i style="height: 64px;  background: #60a5fa;"></i>
+        <i style="height: 104px; background: #f472b6;"></i>
+        <i style="height: 78px;  background: #fbbf24;"></i>
+        <i style="height: 44px;  background: #34d399;"></i>
+      </div>
+      <span class="strip-cap">vocals · drums · bass · guitar · piano · other</span>
+    </div>
+
+    <section>
+      <p class="kicker">The fine print</p>
+      <h2>Honest details.</h2>
+      <dl class="facts">
+        <div class="fact">
+          <dt>Everything stays local</dt>
+          <dd>Audio is downloaded and separated on your machine. No accounts, no cloud, no telemetry.</dd>
+        </div>
+        <div class="fact">
+          <dt>First run is the big one</dt>
+          <dd>Setup installs a private Python engine, about 2GB, one time. After that, songs split in minutes and work offline.</dd>
+        </div>
+        <div class="fact">
+          <dt>Requirements</dt>
+          <dd>macOS 12+ (Apple Silicon) or Windows 10/11, with Python 3.9+ available. ffmpeg is bundled.</dd>
+        </div>
+        <div class="fact">
+          <dt>Open source, MIT</dt>
+          <dd>Source code is on GitHub. Powered by demucs, yt-dlp and the Web Audio API.</dd>
+        </div>
+      </dl>
+    </section>
+
+    <div class="end">
+      <h2>Put your first track under the knife.</h2>
+      <div class="cta">
+        <a class="btn-dl" id="dl2" href="https://github.com/danielravina/stemkit/releases/latest">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span id="dl2-label">Download</span>
+        </a>
+        <a class="btn-ghost" href="https://github.com/danielravina/stemkit" target="_blank" rel="noopener">Star on GitHub</a>
+      </div>
+    </div>
+
+    <footer>
+      <span class="note">© 2026 StemKit · MIT license · not affiliated with YouTube or Google</span>
+      <div class="links">
+        <a href="https://github.com/danielravina/stemkit" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/danielravina/stemkit/releases" target="_blank" rel="noopener">Releases</a>
+        <a href="https://github.com/danielravina/stemkit/issues" target="_blank" rel="noopener">Issues</a>
+      </div>
+    </footer>
+  </div>
+
+  <script>
+    (function () {
+      var REPO = 'danielravina/stemkit'
+      var ua = navigator.userAgent
+      var os = /Mac/i.test(ua) ? 'mac' : /Win/i.test(ua) ? 'win' : null
+
+      function apply(release) {
+        var assets = release.assets || []
+        var pick = null
+        if (os === 'mac') pick = assets.find(function (a) { return a.name.endsWith('mac-arm64.dmg') })
+        if (os === 'win') pick = assets.find(function (a) { return a.name.endsWith('win-x64.exe') })
+        var label = os === 'mac' ? 'Download for macOS' : os === 'win' ? 'Download for Windows' : 'Get StemKit'
+        var href = pick ? pick.browser_download_url : release.html_url
+        var cap = pick
+          ? 'StemKit ' + release.tag_name.replace(/^v/, '') + ' · ' + Math.round(pick.size / 1048576) + ' MB'
+          : release.tag_name + ' · all platforms'
+        ;['dl', 'dl2'].forEach(function (id) {
+          var b = document.getElementById(id)
+          if (b) b.href = href
+        })
+        ;['dl-label', 'dl2-label'].forEach(function (id) {
+          var l = document.getElementById(id)
+          if (l) l.textContent = label
+        })
+        var c = document.getElementById('dl-cap')
+        if (c) c.textContent = cap
+      }
+
+      fetch('https://api.github.com/repos/' + REPO + '/releases/latest', {
+        headers: { Accept: 'application/vnd.github+json' }
+      })
+        .then(function (r) { if (!r.ok) throw new Error('rate limited'); return r.json() })
+        .then(apply)
+        .catch(function () {
+          var c = document.getElementById('dl-cap')
+          if (c) c.textContent = 'grab the latest release from GitHub'
+        })
+    })()
+  </script>
+</body>
+</html>
