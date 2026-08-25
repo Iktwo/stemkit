@@ -41,24 +41,16 @@
     .wrap { max-width: 1120px; margin: 0 auto; padding: 0 28px; }
     .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
 
-    /* nav */
-    nav {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 26px 0;
-    }
+    nav { display: flex; align-items: center; justify-content: space-between; padding: 26px 0; }
     .brand { display: flex; align-items: center; gap: 11px; text-decoration: none; color: var(--text); }
     .brand img { width: 30px; height: 30px; border-radius: 8px; }
     .brand span { font-size: 17px; font-weight: 600; letter-spacing: -0.02em; }
     nav .right { display: flex; align-items: center; gap: 22px; }
-    nav .right a {
-      color: var(--muted); text-decoration: none; font-size: 14.5px;
-      transition: color 0.15s;
-    }
+    nav .right a { color: var(--muted); text-decoration: none; font-size: 14.5px; transition: color 0.15s; }
     nav .right a:hover { color: var(--text); }
     nav .right a.gh { display: flex; align-items: center; gap: 7px; }
     nav .right svg { width: 17px; height: 17px; fill: currentColor; }
 
-    /* hero */
     .hero { text-align: center; padding: 84px 0 0; }
     .hero h1 {
       font-size: clamp(2.7rem, 6.4vw, 4.6rem);
@@ -69,10 +61,7 @@
       background: linear-gradient(100deg, var(--violet) 0%, #e7e7ef 50%, var(--emerald) 100%);
       -webkit-background-clip: text; background-clip: text; color: transparent;
     }
-    .hero .sub {
-      margin: 26px auto 0; max-width: 520px;
-      color: var(--muted); font-size: 18px; line-height: 1.55;
-    }
+    .hero .sub { margin: 26px auto 0; max-width: 520px; color: var(--muted); font-size: 18px; line-height: 1.55; }
     .cta { margin-top: 38px; display: flex; align-items: center; justify-content: center; gap: 14px; flex-wrap: wrap; }
     .btn-dl {
       display: inline-flex; align-items: center; gap: 10px;
@@ -80,7 +69,6 @@
       padding: 15px 30px; border-radius: 999px;
       font-size: 15.5px; font-weight: 600; text-decoration: none;
       transition: transform 0.15s ease, box-shadow 0.15s ease;
-      box-shadow: 0 0 0 rgba(167, 139, 250, 0);
     }
     .btn-dl:hover { transform: translateY(-2px); box-shadow: 0 12px 40px rgba(167, 139, 250, 0.35); }
     .btn-dl svg { width: 17px; height: 17px; stroke: currentColor; fill: none; stroke-width: 2; }
@@ -90,12 +78,8 @@
       padding: 15px 8px; transition: color 0.15s;
     }
     .btn-ghost:hover { color: var(--text); }
-    .dl-cap {
-      margin-top: 16px; font-size: 12.5px; color: var(--faint);
-      font-family: "JetBrains Mono", monospace;
-    }
+    .dl-cap { margin-top: 16px; font-size: 12.5px; color: var(--faint); font-family: "JetBrains Mono", monospace; }
 
-    /* media frames */
     .frame {
       position: relative; margin-top: 64px;
       border-radius: 18px; overflow: hidden;
@@ -108,9 +92,8 @@
       background: linear-gradient(120deg, rgba(167, 139, 250, 0.35), rgba(52, 211, 153, 0.25));
       filter: blur(46px); opacity: 0.5; border-radius: 24px;
     }
-    .frame img, .frame video { display: block; width: 100%; height: auto; }
+    .frame img { display: block; width: 100%; height: auto; }
 
-    /* sections */
     section { padding: 110px 0 0; }
     .kicker {
       font-family: "JetBrains Mono", monospace;
@@ -122,50 +105,74 @@
     h2 { font-size: clamp(1.7rem, 3.4vw, 2.5rem); font-weight: 600; letter-spacing: -0.03em; }
     .lede { color: var(--muted); font-size: 16.5px; margin-top: 14px; max-width: 560px; line-height: 1.6; }
 
-    /* steps */
+    .media-card {
+      position: relative; margin-top: 40px;
+      aspect-ratio: 16 / 10;
+      border-radius: 18px; overflow: hidden;
+      border: 1px solid var(--line);
+      background: #101016;
+      box-shadow: 0 40px 90px rgba(0, 0, 0, 0.55);
+      cursor: pointer;
+    }
+    .media-card::before {
+      content: ""; position: absolute; inset: -1px; z-index: -1;
+      background: linear-gradient(120deg, rgba(167, 139, 250, 0.3), rgba(52, 211, 153, 0.2));
+      filter: blur(46px); opacity: 0.45; border-radius: 24px;
+    }
+    .media-card video { display: block; width: 100%; height: 100%; object-fit: cover; }
+    .media-card .play {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(11, 11, 16, 0.35);
+      transition: opacity 0.2s ease, background 0.2s ease;
+    }
+    .media-card .play .circle {
+      width: 74px; height: 74px; border-radius: 999px;
+      background: #fff; color: #0b0b10;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+      transition: transform 0.15s ease;
+    }
+    .media-card:hover .play .circle { transform: scale(1.08); }
+    .media-card .play .circle svg { width: 26px; height: 26px; fill: currentColor; margin-left: 4px; }
+    .media-card .sound {
+      position: absolute; top: 14px; right: 14px;
+      font-family: "JetBrains Mono", monospace; font-size: 11px;
+      background: rgba(11, 11, 16, 0.7); color: var(--text);
+      border-radius: 6px; padding: 5px 9px; letter-spacing: 0.06em;
+    }
+    .media-card .bar {
+      position: absolute; bottom: 0; left: 0; height: 3px; width: 0%;
+      background: linear-gradient(90deg, var(--violet), var(--emerald));
+    }
+    .media-card.playing .play { opacity: 0; }
+    .media-card.playing:hover .play { opacity: 1; background: rgba(11, 11, 16, 0.2); }
+    .media-card.playing:hover .play .circle { background: rgba(255, 255, 255, 0.9); }
+    .media-card .caption {
+      position: absolute; left: 16px; bottom: 14px;
+      font-family: "JetBrains Mono", monospace; font-size: 11.5px;
+      color: rgba(231, 231, 231, 0.75);
+      background: rgba(11, 11, 16, 0.65); border-radius: 6px; padding: 5px 10px;
+    }
+    .caption-note { color: var(--faint); font-size: 13px; margin-top: 16px; font-family: "JetBrains Mono", monospace; }
+
     .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 40px; margin-top: 56px; }
     .step { border-top: 1px solid var(--line); padding-top: 26px; }
     .step .n { font-family: "JetBrains Mono", monospace; font-size: 13px; color: var(--faint); }
     .step h3 { font-size: 19px; font-weight: 600; letter-spacing: -0.02em; margin: 14px 0 10px; }
     .step p { color: var(--muted); font-size: 14.5px; line-height: 1.6; }
 
-    /* stem strip */
     .strip-wrap { margin-top: 60px; display: flex; flex-direction: column; align-items: center; gap: 22px; }
     .strip { display: flex; align-items: flex-end; gap: 15px; height: 104px; }
     .strip i { display: block; width: 11px; border-radius: 999px; transition: transform 0.25s ease; }
     .strip i:hover { transform: scaleY(1.08); }
     .strip-cap { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--faint); letter-spacing: 0.14em; }
 
-    /* media slots */
-    .slot {
-      margin-top: 40px;
-      border: 1px dashed rgba(255, 255, 255, 0.18);
-      border-radius: 16px;
-      background: var(--panel);
-      padding: 40px 44px;
-      display: flex; flex-direction: column; gap: 16px;
-    }
-    .slot-file {
-      align-self: flex-start;
-      font-family: "JetBrains Mono", monospace; font-size: 12.5px;
-      background: rgba(255, 255, 255, 0.06); border-radius: 6px;
-      padding: 5px 10px; color: var(--violet);
-    }
-    .slot p { color: var(--muted); font-size: 15px; line-height: 1.65; max-width: 640px; }
-    .slot p strong { color: var(--text); font-weight: 600; }
-    .slot-spec {
-      font-family: "JetBrains Mono", monospace;
-      font-size: 11.5px; color: var(--faint); letter-spacing: 0.04em;
-      border-top: 1px solid var(--line); padding-top: 14px;
-    }
-
-    /* details */
     .facts { display: grid; grid-template-columns: 1fr 1fr; gap: 0 60px; margin-top: 50px; }
     .fact { border-top: 1px solid var(--line); padding: 22px 0 26px; }
     .fact dt { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
     .fact dd { color: var(--muted); font-size: 14px; line-height: 1.6; margin-top: 8px; }
 
-    /* buttons row in footer-ish cta */
     .end { text-align: center; padding: 130px 0 0; }
     .end h2 { max-width: 640px; margin: 0 auto; }
     .end .cta { margin-top: 34px; }
@@ -184,7 +191,6 @@
       .steps, .facts { grid-template-columns: 1fr; }
       .hero { padding-top: 56px; }
       section { padding-top: 84px; }
-      .slot { padding: 28px 24px; }
     }
   </style>
 </head>
@@ -221,87 +227,80 @@
       <img src="screenshot.jpg" alt="StemKit splitting Bohemian Rhapsody into six stems: video player, presets, and color-coded waveform lanes" />
     </div>
 
-    <!--
-      MEDIA SLOT 1 of 4 · hero flow capture
-      When ready, drop the file in website/media/flow.mp4 and replace the <img> above with:
-      <video src="media/flow.mp4" autoplay muted loop playsinline></video>
-      Brief: Start on the Home screen. Paste the Bohemian Rhapsody URL, hit Split. Let the sidebar
-      show downloading → separating for a few seconds, then jump-cut to the finished song opening
-      in the player with all six stems appearing. End on one second of playback. 10–15s, cursor visible.
-    -->
-
     <section>
-      <p class="kicker">How it works</p>
-      <h2>Three steps. No accounts, no uploads.</h2>
-      <div class="steps">
-        <div class="step">
-          <span class="n">01</span>
-          <h3>Paste a link, or search</h3>
-          <p>YouTube search is built in. Pick a track without ever opening a browser tab.</p>
-        </div>
-        <div class="step">
-          <span class="n">02</span>
-          <h3>Pick your instruments</h3>
-          <p>Vocals, drums, bass, other, plus guitar and piano. Only what you ask for gets produced.</p>
-        </div>
-        <div class="step">
-          <span class="n">03</span>
-          <h3>Play, mute, solo, export</h3>
-          <p>Stems play synced with the video. Karaoke and acapella are presets, not projects.</p>
-        </div>
+      <p class="kicker">Find it</p>
+      <h2>Search without opening a tab.</h2>
+      <p class="lede">YouTube search is built into the app. Type a song, click the result, and the split starts in the background while you keep working.</p>
+
+      <!--
+        MEDIA: media/search.mp4 (click to play, WITH system audio)
+        Record: Home screen. Type "bohemian rhapsody", results appear, click the top one.
+        Cut to the player as playback begins, full mix audible. 8-12s.
+      -->
+      <div class="media-card" data-src="media/search.mp4">
+        <video preload="metadata" playsinline src="media/search.mp4"></video>
+        <div class="play"><div class="circle"><svg viewBox="0 0 24 24"><path d="M8 5.5v13a1 1 0 0 0 1.54.84l10-6.5a1 1 0 0 0 0-1.68l-10-6.5A1 1 0 0 0 8 5.5Z"/></svg></div></div>
+        <span class="sound">SOUND ON</span>
+        <div class="bar"></div>
       </div>
+      <p class="caption-note">search "bohemian rhapsody" → click the result → the song starts playing</p>
     </section>
 
     <section>
-      <p class="kicker green">The karaoke moment</p>
-      <h2>Every song, minus the singer.</h2>
-      <p class="lede">One preset click removes the vocals from any track. Or flip it: solo the voice and nothing else. Instrumentals and acapellas, straight from the original mix.</p>
+      <p class="kicker green">Split it</p>
+      <h2>Watch it happen.</h2>
+      <p class="lede">The split runs in the background with live progress: downloading, converting, separating six stems locally. When it lands, you are one click from playback.</p>
 
       <!--
-        MEDIA SLOT 2 of 4 · media/karaoke.mp4
-        Brief: Play Billie Jean from ~0:30 with vocals audible. Click the Karaoke preset. Vocals drop
-        dead. Let it play 3 more seconds. 5–8s seamless loop.
+        MEDIA: media/split.mp4 (click to play, WITH system audio)
+        Record: Paste a URL, hit Split, let the sidebar run its live stages (a few seconds each,
+        cut between them), then the song lands, click play, the full mix hits with sound. 10-15s.
       -->
-      <div class="slot">
-        <span class="slot-file">media/karaoke.mp4</span>
-        <p>Placeholder. Record: play <strong>Billie Jean</strong> from about 0:30 with the vocals audible, click the <strong>Karaoke</strong> preset, let the vocals drop dead, keep playing for three more seconds. Seamless loop, 5 to 8 seconds.</p>
-        <span class="slot-spec">MP4 · H.264 · 30fps · no audio · ≤ 6MB · window at 1280×800 · cursor visible</span>
+      <div class="media-card" data-src="media/split.mp4">
+        <video preload="metadata" playsinline src="media/split.mp4"></video>
+        <div class="play"><div class="circle"><svg viewBox="0 0 24 24"><path d="M8 5.5v13a1 1 0 0 0 1.54.84l10-6.5a1 1 0 0 0 0-1.68l-10-6.5A1 1 0 0 0 8 5.5Z"/></svg></div></div>
+        <span class="sound">SOUND ON</span>
+        <div class="bar"></div>
       </div>
+      <p class="caption-note">downloading → converting → separating six stems → the mix drops in</p>
     </section>
 
     <section>
-      <p class="kicker amber">Built like a DAW</p>
-      <h2>The audio leads. The video follows.</h2>
-      <p class="lede">Click anywhere on any waveform and the stems land on the exact sample, instantly. The video catches up on its own. Scrubbing feels like an instrument, not a spinner.</p>
+      <p class="kicker amber">Play it</p>
+      <h2>Hear the vocals disappear.</h2>
+      <p class="lede">This is the whole product in fifteen seconds. Full mix, then karaoke, then acapella, straight from the original recording. Turn the sound on for this one.</p>
 
       <!--
-        MEDIA SLOT 3 of 4 · media/scrub.mp4
-        Brief: While a track plays, click three different spots on the vocal waveform one after
-        another. Stems jump instantly, video follows. Finish by dragging one stem's volume slider.
-        5–8s loop.
+        MEDIA: media/play.mp4 (click to play, WITH system audio) - THE HERO CLIP
+        Record: Play from ~0:30 with the full mix audible (4s). Click Karaoke, vocals drop dead,
+        let it run (6s). Click Acapella, only the voice remains (5s). End back on All. 15-20s.
       -->
-      <div class="slot">
-        <span class="slot-file">media/scrub.mp4</span>
-        <p>Placeholder. Record: while a track plays, click three different spots on the <strong>vocal waveform</strong> in a row, then drag one stem's volume slider. Stems jump instantly, the video follows. 5 to 8 second loop.</p>
-        <span class="slot-spec">MP4 · H.264 · 30fps · no audio · ≤ 6MB · window at 1280×800 · cursor visible</span>
+      <div class="media-card" data-src="media/play.mp4">
+        <video preload="metadata" playsinline src="media/play.mp4"></video>
+        <div class="play"><div class="circle"><svg viewBox="0 0 24 24"><path d="M8 5.5v13a1 1 0 0 0 1.54.84l10-6.5a1 1 0 0 0 0-1.68l-10-6.5A1 1 0 0 0 8 5.5Z"/></svg></div></div>
+        <span class="sound">SOUND ON</span>
+        <div class="bar"></div>
       </div>
+      <p class="caption-note">full mix → karaoke → acapella, one preset click at a time</p>
     </section>
 
     <section>
-      <p class="kicker">Search to stems</p>
-      <h2>From a thought to six tracks in minutes.</h2>
-      <p class="lede">Search YouTube without opening a tab. Splits run in the background with live progress, and finished songs reopen from the library instantly.</p>
+      <p class="kicker green">Keep it</p>
+      <h2>Every split, one click away.</h2>
+      <p class="lede">Finished songs live in your library and reopen instantly, stems and all. Export any stem, or all of them, as WAVs for your DAW.</p>
 
       <!--
-        MEDIA SLOT 4 of 4 · media/search.mp4
-        Brief: Type "bohemian rhapsody" in the search box, results appear, click the top one, sidebar
-        runs the live stage labels, song lands in the library. 8–10s.
+        MEDIA: media/library.mp4 (click to play, WITH system audio)
+        Record: Library with several songs. Click one, it opens instantly and music starts.
+        Pause, click a different song, instant again with a different sound. 10-15s.
       -->
-      <div class="slot">
-        <span class="slot-file">media/search.mp4</span>
-        <p>Placeholder. Record: type <strong>"bohemian rhapsody"</strong> in the search box, click the top result, let the sidebar run its live stage labels, then open the finished song from the library. 8 to 10 seconds.</p>
-        <span class="slot-spec">MP4 · H.264 · 30fps · no audio · ≤ 6MB · window at 1280×800 · cursor visible</span>
+      <div class="media-card" data-src="media/library.mp4">
+        <video preload="metadata" playsinline src="media/library.mp4"></video>
+        <div class="play"><div class="circle"><svg viewBox="0 0 24 24"><path d="M8 5.5v13a1 1 0 0 0 1.54.84l10-6.5a1 1 0 0 0 0-1.68l-10-6.5A1 1 0 0 0 8 5.5Z"/></svg></div></div>
+        <span class="sound">SOUND ON</span>
+        <div class="bar"></div>
       </div>
+      <p class="caption-note">click a song, it opens instantly with its stems · click another, same thing</p>
     </section>
 
     <div class="strip-wrap">
@@ -397,6 +396,39 @@
           var c = document.getElementById('dl-cap')
           if (c) c.textContent = 'grab the latest release from GitHub'
         })
+
+      document.querySelectorAll('.media-card').forEach(function (card) {
+        var video = card.querySelector('video')
+        var play = card.querySelector('.play')
+        var bar = card.querySelector('.bar')
+        video.addEventListener('error', function () {
+          card.style.opacity = '0.45'
+          card.style.cursor = 'default'
+        }, { once: true })
+        card.addEventListener('click', function () {
+          if (!video.paused) {
+            video.pause()
+            return
+          }
+          document.querySelectorAll('.media-card video').forEach(function (v) {
+            if (v !== video) v.pause()
+          })
+          video.play()
+        })
+        video.addEventListener('play', function () {
+          card.classList.add('playing')
+        })
+        video.addEventListener('pause', function () {
+          card.classList.remove('playing')
+        })
+        video.addEventListener('timeupdate', function () {
+          if (video.duration) bar.style.width = (video.currentTime / video.duration) * 100 + '%'
+        })
+        video.addEventListener('ended', function () {
+          card.classList.remove('playing')
+          bar.style.width = '0%'
+        })
+      })
     })()
   </script>
 </body>
