@@ -39,7 +39,6 @@
       overflow-x: hidden;
     }
     .wrap { max-width: 1120px; margin: 0 auto; padding: 0 28px; }
-    .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
 
     nav { display: flex; align-items: center; justify-content: space-between; padding: 26px 0; }
     .brand { display: flex; align-items: center; gap: 11px; text-decoration: none; color: var(--text); }
@@ -82,7 +81,7 @@
 
     .frame {
       position: relative; margin-top: 64px;
-      border-radius: 18px; overflow: hidden;
+      border-radius: 18px; overflow: hidden; cursor: pointer;
       border: 1px solid var(--line);
       box-shadow: 0 40px 90px rgba(0, 0, 0, 0.55);
       background: #101016;
@@ -92,7 +91,38 @@
       background: linear-gradient(120deg, rgba(167, 139, 250, 0.35), rgba(52, 211, 153, 0.25));
       filter: blur(46px); opacity: 0.5; border-radius: 24px;
     }
-    .frame img { display: block; width: 100%; height: auto; }
+    .frame img, .frame video { display: block; width: 100%; height: auto; }
+    .frame .play {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(11, 11, 16, 0.35);
+      transition: opacity 0.2s ease;
+    }
+    .frame .play .circle {
+      width: 84px; height: 84px; border-radius: 999px;
+      background: #fff; color: #0b0b10;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+      transition: transform 0.15s ease;
+    }
+    .frame:hover .play .circle { transform: scale(1.08); }
+    .frame .play .circle svg { width: 30px; height: 30px; fill: currentColor; margin-left: 5px; }
+    .frame .sound {
+      position: absolute; top: 16px; right: 16px;
+      font-family: "JetBrains Mono", monospace; font-size: 11.5px;
+      background: rgba(11, 11, 16, 0.7); color: var(--text);
+      border-radius: 6px; padding: 6px 11px; letter-spacing: 0.08em;
+    }
+    .frame .bar {
+      position: absolute; bottom: 0; left: 0; height: 3px; width: 0%;
+      background: linear-gradient(90deg, var(--violet), var(--emerald));
+    }
+    .frame.playing .play { opacity: 0; }
+    .frame.playing:hover .play { opacity: 1; background: rgba(11, 11, 16, 0.2); }
+    .frame.playing:hover .play .circle { background: rgba(255, 255, 255, 0.9); }
+    .frame .fallback { display: none; }
+    .frame.novideo .fallback { display: block; }
+    .frame.novideo video, .frame.novideo .play, .frame.novideo .sound { display: none; }
 
     section { padding: 110px 0 0; }
     .kicker {
@@ -112,7 +142,6 @@
       border: 1px solid var(--line);
       background: #101016;
       box-shadow: 0 40px 90px rgba(0, 0, 0, 0.55);
-      cursor: pointer;
     }
     .media-card::before {
       content: ""; position: absolute; inset: -1px; z-index: -1;
@@ -120,40 +149,26 @@
       filter: blur(46px); opacity: 0.45; border-radius: 24px;
     }
     .media-card video { display: block; width: 100%; height: 100%; object-fit: cover; }
-    .media-card .play {
+    .media-card .slot-note {
       position: absolute; inset: 0;
-      display: flex; align-items: center; justify-content: center;
-      background: rgba(11, 11, 16, 0.35);
-      transition: opacity 0.2s ease, background 0.2s ease;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 16px; padding: 40px 44px; text-align: center;
     }
-    .media-card .play .circle {
-      width: 74px; height: 74px; border-radius: 999px;
-      background: #fff; color: #0b0b10;
-      display: flex; align-items: center; justify-content: center;
-      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
-      transition: transform 0.15s ease;
+    .slot-file {
+      font-family: "JetBrains Mono", monospace; font-size: 12.5px;
+      background: rgba(255, 255, 255, 0.06); border-radius: 6px;
+      padding: 5px 10px; color: var(--violet);
     }
-    .media-card:hover .play .circle { transform: scale(1.08); }
-    .media-card .play .circle svg { width: 26px; height: 26px; fill: currentColor; margin-left: 4px; }
-    .media-card .sound {
-      position: absolute; top: 14px; right: 14px;
-      font-family: "JetBrains Mono", monospace; font-size: 11px;
-      background: rgba(11, 11, 16, 0.7); color: var(--text);
-      border-radius: 6px; padding: 5px 9px; letter-spacing: 0.06em;
+    .media-card .slot-note p { color: var(--muted); font-size: 15px; line-height: 1.65; max-width: 560px; }
+    .media-card .slot-note p strong { color: var(--text); font-weight: 600; }
+    .media-card .slot-spec {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 11.5px; color: var(--faint); letter-spacing: 0.04em;
     }
-    .media-card .bar {
-      position: absolute; bottom: 0; left: 0; height: 3px; width: 0%;
-      background: linear-gradient(90deg, var(--violet), var(--emerald));
-    }
-    .media-card.playing .play { opacity: 0; }
-    .media-card.playing:hover .play { opacity: 1; background: rgba(11, 11, 16, 0.2); }
-    .media-card.playing:hover .play .circle { background: rgba(255, 255, 255, 0.9); }
-    .media-card .caption {
-      position: absolute; left: 16px; bottom: 14px;
-      font-family: "JetBrains Mono", monospace; font-size: 11.5px;
-      color: rgba(231, 231, 231, 0.75);
-      background: rgba(11, 11, 16, 0.65); border-radius: 6px; padding: 5px 10px;
-    }
+    .media-card video { position: absolute; inset: 0; }
+    .media-card.ready video { position: absolute; inset: 0; }
+    .media-card:not(.ready) video { display: none; }
+    .media-card.ready .slot-note { display: none; }
     .caption-note { color: var(--faint); font-size: 13px; margin-top: 16px; font-family: "JetBrains Mono", monospace; }
 
     .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 40px; margin-top: 56px; }
@@ -223,8 +238,18 @@
       <p class="dl-cap" id="dl-cap">fetching the latest release…</p>
     </header>
 
-    <div class="frame">
-      <img src="screenshot.jpg" alt="StemKit splitting Bohemian Rhapsody into six stems: video player, presets, and color-coded waveform lanes" />
+    <!--
+      HERO VIDEO · media/hero.mp4 (the only sound-on video on the page, click to play)
+      Record: play Bohemian Rhapsody from ~0:30 with the full mix audible (4s). Click Karaoke,
+      vocals drop dead, let it run (6s). Click Acapella, only the voice remains (5s). Back to All (2s).
+      15-20s. Capture SYSTEM AUDIO, not the mic. The screenshot below is the poster frame.
+    -->
+    <div class="frame" id="hero">
+      <img class="fallback" src="screenshot.jpg" alt="StemKit splitting Bohemian Rhapsody into six stems" />
+      <video preload="metadata" playsinline src="media/hero.mp4" poster="screenshot.jpg"></video>
+      <div class="play"><div class="circle"><svg viewBox="0 0 24 24"><path d="M8 5.5v13a1 1 0 0 0 1.54.84l10-6.5a1 1 0 0 0 0-1.68l-10-6.5A1 1 0 0 0 8 5.5Z"/></svg></div></div>
+      <span class="sound">SOUND ON · CLICK</span>
+      <div class="bar"></div>
     </div>
 
     <section>
@@ -232,18 +257,16 @@
       <h2>Search without opening a tab.</h2>
       <p class="lede">YouTube search is built into the app. Type a song, click the result, and the split starts in the background while you keep working.</p>
 
-      <!--
-        MEDIA: media/search.mp4 (click to play, WITH system audio)
-        Record: Home screen. Type "bohemian rhapsody", results appear, click the top one.
-        Cut to the player as playback begins, full mix audible. 8-12s.
-      -->
+      <!-- MEDIA: media/search.mp4 · muted loop · type "bohemian rhapsody", results appear, click the top one, split begins. 6-10s -->
       <div class="media-card" data-src="media/search.mp4">
-        <video preload="metadata" playsinline src="media/search.mp4"></video>
-        <div class="play"><div class="circle"><svg viewBox="0 0 24 24"><path d="M8 5.5v13a1 1 0 0 0 1.54.84l10-6.5a1 1 0 0 0 0-1.68l-10-6.5A1 1 0 0 0 8 5.5Z"/></svg></div></div>
-        <span class="sound">SOUND ON</span>
-        <div class="bar"></div>
+        <video muted loop playsinline preload="metadata" src="media/search.mp4"></video>
+        <div class="slot-note">
+          <span class="slot-file">media/search.mp4</span>
+          <p>Type <strong>"bohemian rhapsody"</strong> in the search box, results appear, click the top one, the split begins in the sidebar. 6–10s loop.</p>
+          <span class="slot-spec">MP4 · H.264 · 30fps · no audio · ≤ 4MB · 1280×800</span>
+        </div>
       </div>
-      <p class="caption-note">search "bohemian rhapsody" → click the result → the song starts playing</p>
+      <p class="caption-note">search → click → the split starts in the background</p>
     </section>
 
     <section>
@@ -251,37 +274,33 @@
       <h2>Watch it happen.</h2>
       <p class="lede">The split runs in the background with live progress: downloading, converting, separating six stems locally. When it lands, you are one click from playback.</p>
 
-      <!--
-        MEDIA: media/split.mp4 (click to play, WITH system audio)
-        Record: Paste a URL, hit Split, let the sidebar run its live stages (a few seconds each,
-        cut between them), then the song lands, click play, the full mix hits with sound. 10-15s.
-      -->
+      <!-- MEDIA: media/split.mp4 · muted loop · sidebar stages running, song lands, stems appear. 8-12s -->
       <div class="media-card" data-src="media/split.mp4">
-        <video preload="metadata" playsinline src="media/split.mp4"></video>
-        <div class="play"><div class="circle"><svg viewBox="0 0 24 24"><path d="M8 5.5v13a1 1 0 0 0 1.54.84l10-6.5a1 1 0 0 0 0-1.68l-10-6.5A1 1 0 0 0 8 5.5Z"/></svg></div></div>
-        <span class="sound">SOUND ON</span>
-        <div class="bar"></div>
+        <video muted loop playsinline preload="metadata" src="media/split.mp4"></video>
+        <div class="slot-note">
+          <span class="slot-file">media/split.mp4</span>
+          <p>Let the sidebar run its live stages: <strong>downloading → converting → separating</strong>, cut between them, then the song lands and the six stems appear in the player. 8–12s loop.</p>
+          <span class="slot-spec">MP4 · H.264 · 30fps · no audio · ≤ 4MB · 1280×800</span>
+        </div>
       </div>
-      <p class="caption-note">downloading → converting → separating six stems → the mix drops in</p>
+      <p class="caption-note">downloading → converting → separating six stems → ready</p>
     </section>
 
     <section>
       <p class="kicker amber">Play it</p>
-      <h2>Hear the vocals disappear.</h2>
-      <p class="lede">This is the whole product in fifteen seconds. Full mix, then karaoke, then acapella, straight from the original recording. Turn the sound on for this one.</p>
+      <h2>Every song, minus the singer.</h2>
+      <p class="lede">Presets do the heavy lifting: karaoke strips the voice, acapella keeps only it. Watch the lanes react as the mix transforms.</p>
 
-      <!--
-        MEDIA: media/play.mp4 (click to play, WITH system audio) - THE HERO CLIP
-        Record: Play from ~0:30 with the full mix audible (4s). Click Karaoke, vocals drop dead,
-        let it run (6s). Click Acapella, only the voice remains (5s). End back on All. 15-20s.
-      -->
+      <!-- MEDIA: media/play.mp4 · muted loop · click Karaoke (vocals lane dims), click Acapella (only vocals lit), playhead moving. 6-10s -->
       <div class="media-card" data-src="media/play.mp4">
-        <video preload="metadata" playsinline src="media/play.mp4"></video>
-        <div class="play"><div class="circle"><svg viewBox="0 0 24 24"><path d="M8 5.5v13a1 1 0 0 0 1.54.84l10-6.5a1 1 0 0 0 0-1.68l-10-6.5A1 1 0 0 0 8 5.5Z"/></svg></div></div>
-        <span class="sound">SOUND ON</span>
-        <div class="bar"></div>
+        <video muted loop playsinline preload="metadata" src="media/play.mp4"></video>
+        <div class="slot-note">
+          <span class="slot-file">media/play.mp4</span>
+          <p>Click <strong>Karaoke</strong> and watch the vocals lane go dim, click <strong>Acapella</strong> and only it stays lit, playhead moving the whole time. 6–10s loop.</p>
+          <span class="slot-spec">MP4 · H.264 · 30fps · no audio · ≤ 4MB · 1280×800</span>
+        </div>
       </div>
-      <p class="caption-note">full mix → karaoke → acapella, one preset click at a time</p>
+      <p class="caption-note">karaoke → acapella → back, watch the lanes react</p>
     </section>
 
     <section>
@@ -289,16 +308,14 @@
       <h2>Every split, one click away.</h2>
       <p class="lede">Finished songs live in your library and reopen instantly, stems and all. Export any stem, or all of them, as WAVs for your DAW.</p>
 
-      <!--
-        MEDIA: media/library.mp4 (click to play, WITH system audio)
-        Record: Library with several songs. Click one, it opens instantly and music starts.
-        Pause, click a different song, instant again with a different sound. 10-15s.
-      -->
+      <!-- MEDIA: media/library.mp4 · muted loop · click between songs in the library, each opens instantly. 6-10s -->
       <div class="media-card" data-src="media/library.mp4">
-        <video preload="metadata" playsinline src="media/library.mp4"></video>
-        <div class="play"><div class="circle"><svg viewBox="0 0 24 24"><path d="M8 5.5v13a1 1 0 0 0 1.54.84l10-6.5a1 1 0 0 0 0-1.68l-10-6.5A1 1 0 0 0 8 5.5Z"/></svg></div></div>
-        <span class="sound">SOUND ON</span>
-        <div class="bar"></div>
+        <video muted loop playsinline preload="metadata" src="media/library.mp4"></video>
+        <div class="slot-note">
+          <span class="slot-file">media/library.mp4</span>
+          <p>Click one song in the library, it opens <strong>instantly</strong>, click a different one, same thing. Show the variety of songs stored. 6–10s loop.</p>
+          <span class="slot-spec">MP4 · H.264 · 30fps · no audio · ≤ 4MB · 1280×800</span>
+        </div>
       </div>
       <p class="caption-note">click a song, it opens instantly with its stems · click another, same thing</p>
     </section>
@@ -390,44 +407,50 @@
       fetch('https://api.github.com/repos/' + REPO + '/releases/latest', {
         headers: { Accept: 'application/vnd.github+json' }
       })
-        .then(function (r) { if (!r.ok) throw new Error('rate limited'); return r.json() })
+        .then(function (r) { if (!r.ok) throw new Error('unavailable'); return r.json() })
         .then(apply)
         .catch(function () {
           var c = document.getElementById('dl-cap')
           if (c) c.textContent = 'grab the latest release from GitHub'
         })
 
+      /* hero: click to play with sound, poster falls back to screenshot if video missing */
+      var hero = document.getElementById('hero')
+      var heroVideo = hero.querySelector('video')
+      heroVideo.addEventListener('error', function () {
+        hero.classList.add('novideo')
+      }, { once: true })
+      hero.addEventListener('click', function () {
+        if (heroVideo.error) return
+        if (heroVideo.paused) {
+          heroVideo.play()
+          hero.classList.add('playing')
+        } else {
+          heroVideo.pause()
+          hero.classList.remove('playing')
+        }
+      })
+      heroVideo.addEventListener('timeupdate', function () {
+        if (heroVideo.duration) {
+          hero.querySelector('.bar').style.width = (heroVideo.currentTime / heroVideo.duration) * 100 + '%'
+        }
+      })
+      heroVideo.addEventListener('ended', function () {
+        hero.classList.remove('playing')
+        hero.querySelector('.bar').style.width = '0%'
+      })
+
+      /* chapters: muted autoplay loops, graceful note until the file exists */
       document.querySelectorAll('.media-card').forEach(function (card) {
         var video = card.querySelector('video')
-        var play = card.querySelector('.play')
-        var bar = card.querySelector('.bar')
         video.addEventListener('error', function () {
-          card.style.opacity = '0.45'
-          card.style.cursor = 'default'
+          card.classList.remove('ready')
         }, { once: true })
-        card.addEventListener('click', function () {
-          if (!video.paused) {
-            video.pause()
-            return
-          }
-          document.querySelectorAll('.media-card video').forEach(function (v) {
-            if (v !== video) v.pause()
-          })
-          video.play()
+        video.addEventListener('loadeddata', function () {
+          card.classList.add('ready')
+          video.play().catch(function () {})
         })
-        video.addEventListener('play', function () {
-          card.classList.add('playing')
-        })
-        video.addEventListener('pause', function () {
-          card.classList.remove('playing')
-        })
-        video.addEventListener('timeupdate', function () {
-          if (video.duration) bar.style.width = (video.currentTime / video.duration) * 100 + '%'
-        })
-        video.addEventListener('ended', function () {
-          card.classList.remove('playing')
-          bar.style.width = '0%'
-        })
+        if (video.readyState >= 2) card.classList.add('ready')
       })
     })()
   </script>
