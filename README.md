@@ -1,20 +1,23 @@
 # StemKit
 
-Split any YouTube song into **vocals / drums / bass / other / guitar / piano** — right on your machine.
-The video plays in a corner (muted), perfectly synced local stems play underneath — and the audio is the boss.
+Split any YouTube song into isolated stems — **vocals, drums, bass, guitar, piano** and more — right on your machine.
+
+Search YouTube or paste a link, pick the instruments you want, and play the result like a mini DAW: the video on one side, every stem on its own fader, all perfectly in sync. Karaoke, acapellas and instrumentals are one click away.
+
+Everything runs locally — no accounts, no cloud, no API keys.
 
 ![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-black) ![local](https://img.shields.io/badge/100%25-local-emerald)
 
 ## Features
 
-- Search YouTube built-in (no API keys) or paste a link
-- Pick instruments individually — the right separation engine is chosen for you
-- Audio-leads sync engine: seeks are instant, video follows
+- Built-in YouTube search, or paste a link
+- Choose your instruments individually; the right separation engine is picked for you
+- Tight audio/video sync with instant, artifact-free seeking
 - One-click presets: **All · Karaoke · Acapella · Drums + Bass**
 - Per-stem mute/solo/volume, waveforms with click-to-seek
 - Parallel background splitting with live progress
 - Export any stem (or all) as WAV
-- Everything local: `htdemucs` via Apple MPS / CPU, bundled ffmpeg
+- Fully offline after setup — separation runs on Apple MPS / CPU, ffmpeg included
 
 ## Download
 
@@ -41,7 +44,7 @@ npm install
 npm run dev
 ```
 
-Node version mismatch? `npm run *` scripts auto-relaunch with a suitable Node (nvm / nvm-windows).
+Wrong Node version? Scripts auto-relaunch with a suitable one (nvm / nvm-windows).
 
 ## Build & release
 
@@ -58,7 +61,7 @@ Releases are built by GitHub Actions:
 - push a tag `v*` → binaries attach to a draft GitHub Release
 - `workflow_dispatch` ("Run workflow") → on-demand artifacts on the run page
 
-macOS builds are Developer-ID-signed automatically when the cert is available in the CI/agent keychain. To also **notarize** (removes the one-time "Open Anyway" step), add repo secrets `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD` — electron-builder picks them up automatically.
+macOS builds are Developer-ID-signed when the certificate is available — see **Signing in CI** below for the one-time setup, plus optional notarization.
 
 ### Signing in CI (one-time setup)
 
