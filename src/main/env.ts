@@ -1,8 +1,8 @@
 import { spawn, execFile } from 'child_process'
-import { existsSync, writeFileSync, readdirSync } from 'fs'
+import { existsSync, writeFileSync, readdirSync, createWriteStream, mkdirSync, chmodSync, unlinkSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, net } from 'electron'
 
 export interface ToolInfo {
   found: boolean
@@ -45,6 +45,36 @@ export function venvPython(): string {
 
 export function venvYtDlp(): string {
   return join(venvDir(), VENV_BIN, 'yt-dlp' + EXE)
+}
+
+/* standalone python runtime (python-build-standalone), fetched on demand
+   so end users never need python installed */
+const PBS_TAG = '20241002'
+const PBS_VERSION = '3.11.10'
+
+function runtimeDir(): string {
+  return join(userDataDir(), 'python-runtime')
+}
+
+function runtimePython(): string {
+  return IS_WIN
+    ? join(runtimeDir(), 'python', 'python.exe')
+    : join(runtimeDir(), 'python', 'bin', 'python3')
+}
+
+function runtimeArchivePath(): string {
+  const arch = process.arch === 'arm64' ? 'aarch64' : 'x86_64'
+  const triple = IS_WIN ? `${arch}-pc-windows-msvc-shared` : `${arch}-apple-darwin`
+  return join(userDataDir(), `cpython-${PBS_VERSION}-${triple}-install_only.tar.gz`)
+}
+
+function runtimeDownloadUrl(): string {
+  const arch = process.arch === 'arm64' ? 'aarch64' : 'x86_64'
+  const triple = IS_WIN ? `${arch}-pc-windows-msvc-shared` : `${arch}-apple-darwin`
+  return (
+    `https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_TAG}/` +
+    `cpython-${PBS_VERSION}%2B${PBS_TAG}-${triple}-install_only.tar.gz`
+  )
 }
 
 function venvPip(): string {
@@ -217,7 +247,10 @@ interface PyProbe {
 
 export async function detectTools(): Promise<void> {
   const probes: PyProbe[] = []
-  for (const candidate of pyCandidates()) {
+  const candidates: string[] = []
+  if (existsSync(runtimePython())) candidates.push(runtimePython())
+  candidates.push(...pyCandidates())
+  for (const candidate of candidates) {
     if (!existsSync(candidate)) continue
     try {
       const out = await runCapture(candidate, [
@@ -276,11 +309,91 @@ export async function refreshReady(): Promise<boolean> {
   return state.ready
 }
 
+function downloadTo(url: string, dest: string, label: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let lastPct = -1
+    const req = net.request({ url, redirect: 'follow' })
+    req.on('response', (res) => {
+      if (res.statusCode !== 200) {
+        reject(new Error(`${label} download failed (HTTP ${res.statusCode})`))
+        return
+      }
+      const total = Number(res.headers['content-length'] ?? 0)
+      const out = createWriteStream(dest)
+      let done = 0
+      res.on('data', (chunk: Buffer) => {
+        done += chunk.length
+        out.write(chunk)
+        if (total > 0) {
+          const pct = Math.floor((done / total) * 100)
+          if (pct >= lastPct + 10) {
+            lastPct = pct
+            sendEnvEvent(`${label}: ${pct}%`)
+          }
+        }
+      })
+      res.on('end', () => out.end(() => resolve()))
+      res.on('error', (e) => {
+        out.close()
+        reject(e instanceof Error ? e : new Error(String(e)))
+      })
+    })
+    req.on('error', (e) => reject(e instanceof Error ? e : new Error(String(e))))
+    req.end()
+  })
+}
+
+function extractArchive(archive: string, dest: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    mkdirSync(dest, { recursive: true })
+    const child = spawn('tar', ['-xzf', archive, '-C', dest], { stdio: 'ignore' })
+    child.on('close', (code) =>
+      code === 0 ? resolve() : reject(new Error(`extract failed (${code})`))
+    )
+    child.on('error', reject)
+  })
+}
+
+export async function ensureRuntimePython(): Promise<boolean> {
+  if (existsSync(runtimePython())) return true
+  try {
+    const archive = runtimeArchivePath()
+    sendEnvEvent('Downloading a private Python runtime (~35MB)')
+    await downloadTo(runtimeDownloadUrl(), archive, 'python')
+    sendEnvEvent('Unpacking python runtime')
+    await extractArchive(archive, runtimeDir())
+    unlinkSync(archive)
+    if (!existsSync(runtimePython())) throw new Error('runtime python missing after extract')
+    chmodSync(runtimePython(), 0o755)
+
+    const out = await runCapture(runtimePython(), ['-V'], 15000).catch(() => '')
+    if (!/Python 3\./.test(out)) throw new Error(`runtime python not runnable (${out.trim()})`)
+    return true
+  } catch (err) {
+    sendEnvEvent(
+      `python runtime setup failed: ${err instanceof Error ? err.message : String(err)}`,
+      'error'
+    )
+    try {
+      unlinkSync(runtimeArchivePath())
+    } catch {}
+    return false
+  }
+}
+
 export async function bootstrap(): Promise<boolean> {
   if (state.bootstrapping) return false
   if (!state.python.found || !state.python.path) {
-    sendEnvEvent('No suitable python3 found on this machine', 'error')
-    return false
+    const ok = await ensureRuntimePython()
+    if (!ok) {
+      sendEnvEvent('No suitable python3 found on this machine', 'error')
+      return false
+    }
+    await detectTools()
+    if (!state.python.found || !state.python.path) {
+      sendEnvEvent('No suitable python3 found on this machine', 'error')
+      return false
+    }
   }
   state.bootstrapping = true
 
