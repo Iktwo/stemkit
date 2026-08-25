@@ -38,7 +38,7 @@ First launch creates a private Python environment and downloads the separation e
 ## Requirements
 
 - **macOS 12+** (Apple Silicon) or **Windows 10/11** (x64)
-- Python 3.9+ available on PATH or in a standard install location (auto-detected)
+- No manual installs: if no Python 3.9+ is detected, StemKit downloads a private runtime (python-build-standalone) during first-launch setup
 - Node.js 20+ only for building from source
 
 ## Develop
