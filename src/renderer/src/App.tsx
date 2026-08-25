@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { EnvStatus, JobProgress, JobStage, Song } from '../../shared/types'
+import type { EnvStatus, JobProgress, JobStage, Song, UpdateEvent } from '../../shared/types'
 import { parseVideoId } from '../../shared/url'
 import { Sidebar } from './components/Sidebar'
 import { Home } from './components/Home'
@@ -42,6 +42,8 @@ export default function App(): React.ReactElement {
   const [lastUrl, setLastUrl] = useState('')
   const [lastModel, setLastModel] = useState('htdemucs')
   const [envLogs, setEnvLogs] = useState<EnvLog[]>([])
+  const [update, setUpdate] = useState<UpdateEvent | null>(null)
+  const [appVersion, setAppVersion] = useState<string | undefined>(undefined)
 
   useEffect(() => {
     void window.stemkit.envStatus().then(setStatus)
@@ -64,9 +66,12 @@ export default function App(): React.ReactElement {
     const offEnv = window.stemkit.onEnvEvent((e) =>
       setEnvLogs((l) => [...l.slice(-300), { message: e.message, level: e.level }])
     )
+    const offUpdate = window.stemkit.onUpdateEvent((e) => setUpdate(e))
+    void window.stemkit.getAppVersion().then(setAppVersion)
     return () => {
       offJob()
       offEnv()
+      offUpdate()
     }
   }, [])
 
@@ -228,9 +233,12 @@ export default function App(): React.ReactElement {
         songs={displaySongs}
         activeId={activeId}
         pending={pendingMap}
+        update={update ?? undefined}
+        appVersion={appVersion}
         onSelect={(id) => setActiveId(id)}
         onDelete={(id) => void deleteSong(id)}
         onAdd={() => setActiveId(null)}
+        onInstallUpdate={() => window.stemkit.installUpdate()}
       />
       <main className="flex-1 min-w-0">{main}</main>
     </div>

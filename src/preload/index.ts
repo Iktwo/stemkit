@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
-import type { JobEvent, EnvEvent, StemKitApi } from '../shared/types'
+import type { JobEvent, EnvEvent, UpdateEvent, StemKitApi } from '../shared/types'
 
 function subscribe<T>(channel: string, cb: (data: T) => void): () => void {
   const handler = (_e: IpcRendererEvent, data: T): void => cb(data)
@@ -22,6 +22,9 @@ const api: StemKitApi = {
   startJob: (url, model, stems) => ipcRenderer.invoke('jobs:start', url, model, stems),
   cancelJob: (videoId?: string) => ipcRenderer.invoke('jobs:cancel', videoId),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
+  getAppVersion: () => ipcRenderer.invoke('app:version'),
+  installUpdate: () => ipcRenderer.invoke('update:install'),
+  onUpdateEvent: (cb) => subscribe<UpdateEvent>('update:event', cb),
   onJobEvent: (cb) => subscribe<JobEvent>('job:event', cb),
   onEnvEvent: (cb) => subscribe<EnvEvent>('env:event', cb)
 }

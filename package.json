@@ -1,7 +1,7 @@
 {
   "name": "stemkit",
   "productName": "StemKit",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Local YouTube stem splitter and player",
   "main": "./out/main/index.js",
   "author": "daniel",
@@ -19,7 +19,9 @@
     "dist:win": "node scripts/run.cjs dist:win",
     "dist:all": "node scripts/run.cjs dist:all"
   },
-  "dependencies": {},
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.6",
     "@types/node": "^22.10.2",

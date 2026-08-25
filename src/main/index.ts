@@ -12,6 +12,7 @@ import {
 } from './env'
 import { loadSongs, removeSong, stemBuffers, stemsDir, stemsFor } from './library'
 import { startJob, cancelJob, searchYouTube } from './pipeline'
+import { initUpdater } from './updater'
 
 let mainWindow: BrowserWindow | null = null
 let staticServer: Server | null = null
@@ -164,6 +165,8 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('search:youtube', (_e, query: string) => searchYouTube(query))
+  ipcMain.handle('app:version', () => app.getVersion())
+  initUpdater()
   ipcMain.handle('open-external', (_e, url: string) => {
     if (/^https:\/\/(www\.)?(youtube\.com|youtu\.be)\//.test(url)) {
       shell.openExternal(url)

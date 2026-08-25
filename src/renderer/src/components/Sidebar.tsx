@@ -6,18 +6,24 @@ interface Props {
   songs: Song[]
   activeId: string | null
   pending?: Record<string, { label: string; error?: boolean }>
+  update?: { status: string; version?: string; pct?: number }
+  appVersion?: string
   onSelect: (videoId: string) => void
   onDelete: (videoId: string) => void
   onAdd: () => void
+  onInstallUpdate: () => void
 }
 
 export function Sidebar({
   songs,
   activeId,
   pending = {},
+  update,
+  appVersion,
   onSelect,
   onDelete,
-  onAdd
+  onAdd,
+  onInstallUpdate
 }: Props): React.ReactElement {
   return (
     <aside className="w-[264px] shrink-0 h-full flex flex-col border-r border-white/[0.07] bg-black/20">
@@ -110,9 +116,29 @@ export function Sidebar({
         })}
       </div>
 
-      <div className="shrink-0 border-t border-white/[0.07] px-5 py-3 flex items-center gap-2">
-        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-        <span className="text-[11px] text-white/35">Engine ready · 100% local</span>
+      <div className="shrink-0 border-t border-white/[0.07] px-4 py-3 space-y-2">
+        {update?.status === 'downloaded' && (
+          <button
+            onClick={onInstallUpdate}
+            title="Install the downloaded update"
+            className="no-drag w-full flex items-center justify-between rounded-lg bg-emerald-400/15 border border-emerald-400/30 px-3 py-2 text-[12px] text-emerald-200 hover:bg-emerald-400/25 transition-colors"
+          >
+            <span>v{update.version} ready</span>
+            <span className="font-semibold">Restart ↻</span>
+          </button>
+        )}
+        {update?.status === 'progress' && (
+          <div className="flex items-center justify-between text-[11px] text-white/40 px-1">
+            <span>Downloading update…</span>
+            <span className="font-mono">{update.pct}%</span>
+          </div>
+        )}
+        <div className="flex items-center gap-2">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+          <span className="text-[11px] text-white/35 truncate">
+            {appVersion ? `v${appVersion} · ` : ''}Engine ready · 100% local
+          </span>
+        </div>
       </div>
     </aside>
   )

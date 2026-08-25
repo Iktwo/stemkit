@@ -60,6 +60,12 @@ export interface SearchResult {
   duration?: number
 }
 
+export interface UpdateEvent {
+  status: 'checking' | 'available' | 'none' | 'progress' | 'downloaded' | 'error'
+  version?: string
+  pct?: number
+}
+
 export interface StemKitApi {
   envStatus(): Promise<EnvStatus>
   envBootstrap(): Promise<boolean>
@@ -73,6 +79,9 @@ export interface StemKitApi {
   startJob(url: string, model?: string, stems?: string[]): Promise<{ started: boolean }>
   cancelJob(videoId?: string): Promise<void>
   openExternal(url: string): Promise<void>
+  getAppVersion(): Promise<string>
+  installUpdate(): void
+  onUpdateEvent(cb: (ev: UpdateEvent) => void): () => void
   onJobEvent(cb: (ev: JobEvent) => void): () => void
   onEnvEvent(cb: (ev: EnvEvent) => void): () => void
 }

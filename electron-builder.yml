@@ -6,6 +6,10 @@ files:
   - out/**/*
 asar: true
 artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+publish:
+  provider: github
+  owner: danielravina
+  repo: stemkit
 extraResources:
   - from: python
     to: python
@@ -14,6 +18,9 @@ mac:
   icon: build/icon.png
   target:
     - target: dmg
+      arch:
+        - arm64
+    - target: zip
       arch:
         - arm64
   extraResources:
