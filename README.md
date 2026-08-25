@@ -8,6 +8,10 @@ Everything runs locally — no accounts, no cloud, no API keys.
 
 ![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-black) ![local](https://img.shields.io/badge/100%25-local-emerald)
 
+<p align="center">
+  <img src="docs/stemkit.png" alt="StemKit splitting Queen's Bohemian Rhapsody into six stems — video player, presets and color-coded waveform lanes" width="100%" />
+</p>
+
 ## Features
 
 - Built-in YouTube search, or paste a link
