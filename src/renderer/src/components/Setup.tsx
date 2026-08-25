@@ -19,12 +19,12 @@ export function Setup({ status, logs, onInstall }: Props): React.ReactElement {
     {
       ok: status.python.found,
       label: 'Python 3',
-      detail: status.python.path ?? 'not found — install with brew install python'
+      detail: status.python.path ?? 'not installed — StemKit will fetch its own (~35MB)'
     },
     {
       ok: status.ffmpeg.found,
       label: 'ffmpeg',
-      detail: status.ffmpeg.path ?? 'not found — install with brew install ffmpeg'
+      detail: status.ffmpeg.path ?? 'not found — bundled with StemKit'
     }
   ]
 
@@ -36,7 +36,8 @@ export function Setup({ status, logs, onInstall }: Props): React.ReactElement {
           <h1 className="text-xl font-bold tracking-tight">Welcome to StemKit</h1>
         </div>
         <p className="text-center text-white/45 text-sm mt-3 leading-relaxed">
-          One-time setup downloads the separation engine.
+          One-time setup fetches everything StemKit needs — its own Python if
+          you don&apos;t have one, plus the separation engine.
           <br />
           Everything runs locally after that.
         </p>
@@ -60,7 +61,7 @@ export function Setup({ status, logs, onInstall }: Props): React.ReactElement {
         {!status.bootstrapping && (
           <button
             onClick={onInstall}
-            disabled={!status.python.found || !status.ffmpeg.found}
+            disabled={!status.ffmpeg.found}
             className="mt-6 w-full py-3.5 rounded-xl bg-white text-black font-semibold text-sm hover:bg-white/90 active:scale-[0.99] transition-all disabled:opacity-40 disabled:hover:bg-white"
           >
             Install separation engine · ~2 GB, one time
