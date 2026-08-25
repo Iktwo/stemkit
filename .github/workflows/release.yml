@@ -66,13 +66,13 @@ jobs:
           else
             echo "CSC_MAC_P12 secret not set — falling back to ad-hoc signing"
           fi
-          if [ -n "$APPLE_ID_S" ]; then
+          if [ "${{ vars.ENABLE_NOTARIZATION }}" = "true" ] && [ -n "$APPLE_ID_S" ]; then
             echo "APPLE_ID=$APPLE_ID_S" >> "$GITHUB_ENV"
             echo "APPLE_APP_SPECIFIC_PASSWORD=$APPLE_PW_S" >> "$GITHUB_ENV"
             echo "APPLE_TEAM_ID=$APPLE_TEAM_S" >> "$GITHUB_ENV"
             echo "Notarization enabled"
           else
-            echo "APPLE_ID secret not set — skipping notarization"
+            echo "Notarization disabled (requires ENABLE_NOTARIZATION variable = true, active membership, and APPLE secrets)"
           fi
 
       - name: Package (release)
