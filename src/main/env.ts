@@ -249,7 +249,9 @@ export async function detectTools(): Promise<void> {
   const probes: PyProbe[] = []
   const candidates: string[] = []
   if (existsSync(runtimePython())) candidates.push(runtimePython())
-  candidates.push(...pyCandidates())
+  // STEMKIT_FORCE_RUNTIME=1 ignores system python so the private-runtime
+  // download path can be exercised on machines that have python installed
+  if (process.env.STEMKIT_FORCE_RUNTIME !== '1') candidates.push(...pyCandidates())
   for (const candidate of candidates) {
     if (!existsSync(candidate)) continue
     try {
