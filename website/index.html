@@ -135,41 +135,18 @@
     h2 { font-size: clamp(1.7rem, 3.4vw, 2.5rem); font-weight: 600; letter-spacing: -0.03em; }
     .lede { color: var(--muted); font-size: 16.5px; margin-top: 14px; max-width: 560px; line-height: 1.6; }
 
-    .media-card {
-      position: relative; margin-top: 40px;
-      aspect-ratio: 16 / 10;
-      border-radius: 18px; overflow: hidden;
-      border: 1px solid var(--line);
-      background: #101016;
-      box-shadow: 0 40px 90px rgba(0, 0, 0, 0.55);
+    .feats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-top: 56px; }
+    .feat {
+      background: var(--panel); border: 1px solid var(--line);
+      border-radius: 18px; padding: 30px 28px;
     }
-    .media-card::before {
-      content: ""; position: absolute; inset: -1px; z-index: -1;
-      background: linear-gradient(120deg, rgba(167, 139, 250, 0.3), rgba(52, 211, 153, 0.2));
-      filter: blur(46px); opacity: 0.45; border-radius: 24px;
-    }
-    .media-card video { display: block; width: 100%; height: 100%; object-fit: cover; }
-    .media-card .slot-note {
-      position: absolute; inset: 0;
-      display: flex; flex-direction: column; align-items: center; justify-content: center;
-      gap: 16px; padding: 40px 44px; text-align: center;
-    }
-    .slot-file {
-      font-family: "JetBrains Mono", monospace; font-size: 12.5px;
-      background: rgba(255, 255, 255, 0.06); border-radius: 6px;
-      padding: 5px 10px; color: var(--violet);
-    }
-    .media-card .slot-note p { color: var(--muted); font-size: 15px; line-height: 1.65; max-width: 560px; }
-    .media-card .slot-note p strong { color: var(--text); font-weight: 600; }
-    .media-card .slot-spec {
-      font-family: "JetBrains Mono", monospace;
-      font-size: 11.5px; color: var(--faint); letter-spacing: 0.04em;
-    }
-    .media-card video { position: absolute; inset: 0; }
-    .media-card.ready video { position: absolute; inset: 0; }
-    .media-card:not(.ready) video { display: none; }
-    .media-card.ready .slot-note { display: none; }
-    .caption-note { color: var(--faint); font-size: 13px; margin-top: 16px; font-family: "JetBrains Mono", monospace; }
+    .feat .accent { display: block; width: 34px; height: 3px; border-radius: 2px; margin-bottom: 18px; }
+    .feat .kicker { margin-bottom: 10px; }
+    .feat h3 { font-size: 19px; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 12px; }
+    .feat p { color: var(--muted); font-size: 14.5px; line-height: 1.65; }
+    .frame.small { max-width: 760px; margin: 44px auto 0; }
+    .frame.small::before { filter: blur(36px); opacity: 0.4; }
+    .caption-note { color: var(--faint); font-size: 13px; margin-top: 16px; font-family: "JetBrains Mono", monospace; text-align: center; }
 
     .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 40px; margin-top: 56px; }
     .step { border-top: 1px solid var(--line); padding-top: 26px; }
@@ -253,86 +230,37 @@
     </div>
 
     <section>
-      <p class="kicker">Search</p>
-      <h2>YouTube search, built in.</h2>
-      <p class="lede">Type a song, click the result, and the split starts in the background. You never open a browser tab.</p>
-
-      <!--
-        MEDIA: media/search.mp4 (muted loop)
-        Record: Home screen. Type "bohemian rhapsody", results appear, click the top one.
-        Cut to the player as the split begins. 6-10s.
-      -->
-      <div class="media-card" data-src="media/search.mp4">
-        <video muted loop playsinline preload="metadata" src="media/search.mp4"></video>
-        <div class="slot-note">
-          <span class="slot-file">media/search.mp4</span>
-          <p>Type <strong>"bohemian rhapsody"</strong> in the search box, results appear, click the top one, the split begins in the sidebar. 6–10s loop.</p>
-          <span class="slot-spec">MP4 · H.264 · 30fps · no audio · ≤ 4MB · 1280×800</span>
+      <p class="kicker">What it does</p>
+      <h2>Three things, done properly.</h2>
+      <div class="feats">
+        <div class="feat">
+          <span class="accent" style="background: #a78bfa;"></span>
+          <p class="kicker">Search</p>
+          <h3>Embedded YouTube search</h3>
+          <p>Type a song, click the result, and the split starts in the background. You never open a browser tab.</p>
+        </div>
+        <div class="feat">
+          <span class="accent" style="background: #34d399;"></span>
+          <p class="kicker green">Split</p>
+          <h3>Seamless stem splits by instrument</h3>
+          <p>Pick vocals, drums, bass, other, plus guitar and piano. The split runs locally with live progress, and presets isolate each instrument while the playhead keeps moving.</p>
+        </div>
+        <div class="feat">
+          <span class="accent" style="background: #fbbf24;"></span>
+          <p class="kicker amber">Export</p>
+          <h3>Saved library + exports</h3>
+          <p>Every split is saved and reopens instantly. Export any stem, or all of them, as standard WAVs that drop straight into any DAW.</p>
         </div>
       </div>
-      <p class="caption-note">search → click → the split starts in the background</p>
-    </section>
-
-    <section>
-      <p class="kicker">Split</p>
-      <h2>Seamless stem splits, by instrument.</h2>
-      <p class="lede">Pick vocals, drums, bass, other, plus guitar and piano. The split runs locally with live progress, then presets isolate each instrument while the playhead keeps moving.</p>
 
       <!--
-        MEDIA: media/split.mp4 (muted loop)
-        Record: sidebar stages running (downloading, converting, separating), cut between them,
-        song lands, six stems appear in the player. 8-12s.
+        SMALL SCREENSHOT: drop website/small.jpg to replace this.
+        Until then it falls back to the full app screenshot.
       -->
-      <div class="two-up">
-        <div>
-          <div class="media-card" data-src="media/split.mp4">
-            <video muted loop playsinline preload="metadata" src="media/split.mp4"></video>
-            <div class="slot-note">
-              <span class="slot-file">media/split.mp4</span>
-              <p><strong>downloading → converting → separating</strong>, cut between stages, then the six stems appear in the player. 8–12s loop.</p>
-              <span class="slot-spec">MP4 · H.264 · 30fps · no audio · ≤ 4MB · 1280×800</span>
-            </div>
-          </div>
-          <p class="caption-note">the split runs in the background</p>
-        </div>
-        <div>
-          <!--
-            MEDIA: media/play.mp4 (muted loop)
-            Record: click Karaoke (vocals lane dims), click Acapella (only vocals lit),
-            playhead moving the whole time. 6-10s.
-          -->
-          <div class="media-card" data-src="media/play.mp4">
-            <video muted loop playsinline preload="metadata" src="media/play.mp4"></video>
-            <div class="slot-note">
-              <span class="slot-file">media/play.mp4</span>
-              <p>Click <strong>Karaoke</strong> and watch the vocals lane go dim, click <strong>Acapella</strong> and only it stays lit, playhead moving the whole time. 6–10s loop.</p>
-              <span class="slot-spec">MP4 · H.264 · 30fps · no audio · ≤ 4MB · 1280×800</span>
-            </div>
-          </div>
-          <p class="caption-note">presets isolate each instrument</p>
-        </div>
+      <div class="frame small">
+        <img src="small.jpg" onerror="this.onerror=null;this.src='screenshot.jpg'" alt="Inside the StemKit player" />
       </div>
-    </section>
-
-    <section>
-      <p class="kicker">Export</p>
-      <h2>WAVs that work with any DAW.</h2>
-      <p class="lede">Every split is saved in your library and reopens instantly. Export any stem, or all of them, as standard WAV files. Drop them straight into Ableton, Logic, FL Studio, GarageBand. No conversion, no fuss.</p>
-
-      <!--
-        MEDIA: media/library.mp4 (muted loop)
-        Record: library with several songs. Click one, it opens instantly, click a different
-        song, same thing. Then flash the export menu (Export all stems). 6-10s.
-      -->
-      <div class="media-card" data-src="media/library.mp4">
-        <video muted loop playsinline preload="metadata" src="media/library.mp4"></video>
-        <div class="slot-note">
-          <span class="slot-file">media/library.mp4</span>
-          <p>Click one song in the library, it opens <strong>instantly</strong>, click a different one, same thing, then flash the <strong>Export all stems</strong> menu. 6–10s loop.</p>
-          <span class="slot-spec">MP4 · H.264 · 30fps · no audio · ≤ 4MB · 1280×800</span>
-        </div>
-      </div>
-      <p class="caption-note">export any stem, or all of them, as WAV</p>
+      <p class="caption-note">a small look inside the app</p>
     </section>
 
     <section>
@@ -476,19 +404,6 @@
       heroVideo.addEventListener('ended', function () {
         hero.classList.remove('playing')
         hero.querySelector('.bar').style.width = '0%'
-      })
-
-      /* chapters: muted autoplay loops, graceful note until the file exists */
-      document.querySelectorAll('.media-card').forEach(function (card) {
-        var video = card.querySelector('video')
-        video.addEventListener('error', function () {
-          card.classList.remove('ready')
-        }, { once: true })
-        video.addEventListener('loadeddata', function () {
-          card.classList.add('ready')
-          video.play().catch(function () {})
-        })
-        if (video.readyState >= 2) card.classList.add('ready')
       })
     })()
   </script>
