@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>StemKit — split any YouTube song into stems</title>
-  <meta name="description" content="Free and open source. Paste a YouTube link, pick your instruments, and play vocals, drums, bass, guitar and piano as synced stems. Runs entirely on your machine." />
-  <meta property="og:title" content="StemKit — split any YouTube song into stems" />
+  <title>StemKit — split songs from YouTube into stems</title>
+  <meta name="description" content="Free and open source. Paste a link, pick your instruments, and play vocals, drums, bass, guitar and piano as synced stems. Runs entirely on your machine." />
+  <meta property="og:title" content="StemKit — split songs from YouTube into stems" />
   <meta property="og:description" content="Free and open source. Runs entirely on your machine. Karaoke, acapellas and instrumentals, one click away." />
   <meta property="og:image" content="https://stemkit.pages.dev/screenshot.jpg" />
   <meta name="twitter:card" content="summary_large_image" />
@@ -226,7 +226,7 @@
     </nav>
 
     <header class="hero">
-      <h1>Split any YouTube song into <span class="grad">stems</span>.</h1>
+      <h1>Split songs from YouTube into <span class="grad">stems</span>.</h1>
       <p class="sub">Paste a link, pick your instruments, and play vocals, drums, bass, guitar and piano as synced tracks. Free and open source. Runs entirely on your machine.</p>
       <div class="cta">
         <a class="btn-dl" id="dl" href="https://github.com/danielravina/stemkit/releases/latest">
@@ -253,11 +253,15 @@
     </div>
 
     <section>
-      <p class="kicker">Find it</p>
-      <h2>Search without opening a tab.</h2>
-      <p class="lede">YouTube search is built into the app. Type a song, click the result, and the split starts in the background while you keep working.</p>
+      <p class="kicker">Search</p>
+      <h2>YouTube search, built in.</h2>
+      <p class="lede">Type a song, click the result, and the split starts in the background. You never open a browser tab.</p>
 
-      <!-- MEDIA: media/search.mp4 · muted loop · type "bohemian rhapsody", results appear, click the top one, split begins. 6-10s -->
+      <!--
+        MEDIA: media/search.mp4 (muted loop)
+        Record: Home screen. Type "bohemian rhapsody", results appear, click the top one.
+        Cut to the player as the split begins. 6-10s.
+      -->
       <div class="media-card" data-src="media/search.mp4">
         <video muted loop playsinline preload="metadata" src="media/search.mp4"></video>
         <div class="slot-note">
@@ -270,54 +274,88 @@
     </section>
 
     <section>
-      <p class="kicker green">Split it</p>
-      <h2>Watch it happen.</h2>
-      <p class="lede">The split runs in the background with live progress: downloading, converting, separating six stems locally. When it lands, you are one click from playback.</p>
+      <p class="kicker">Split</p>
+      <h2>Seamless stem splits, by instrument.</h2>
+      <p class="lede">Pick vocals, drums, bass, other, plus guitar and piano. The split runs locally with live progress, then presets isolate each instrument while the playhead keeps moving.</p>
 
-      <!-- MEDIA: media/split.mp4 · muted loop · sidebar stages running, song lands, stems appear. 8-12s -->
-      <div class="media-card" data-src="media/split.mp4">
-        <video muted loop playsinline preload="metadata" src="media/split.mp4"></video>
-        <div class="slot-note">
-          <span class="slot-file">media/split.mp4</span>
-          <p>Let the sidebar run its live stages: <strong>downloading → converting → separating</strong>, cut between them, then the song lands and the six stems appear in the player. 8–12s loop.</p>
-          <span class="slot-spec">MP4 · H.264 · 30fps · no audio · ≤ 4MB · 1280×800</span>
+      <!--
+        MEDIA: media/split.mp4 (muted loop)
+        Record: sidebar stages running (downloading, converting, separating), cut between them,
+        song lands, six stems appear in the player. 8-12s.
+      -->
+      <div class="two-up">
+        <div>
+          <div class="media-card" data-src="media/split.mp4">
+            <video muted loop playsinline preload="metadata" src="media/split.mp4"></video>
+            <div class="slot-note">
+              <span class="slot-file">media/split.mp4</span>
+              <p><strong>downloading → converting → separating</strong>, cut between stages, then the six stems appear in the player. 8–12s loop.</p>
+              <span class="slot-spec">MP4 · H.264 · 30fps · no audio · ≤ 4MB · 1280×800</span>
+            </div>
+          </div>
+          <p class="caption-note">the split runs in the background</p>
+        </div>
+        <div>
+          <!--
+            MEDIA: media/play.mp4 (muted loop)
+            Record: click Karaoke (vocals lane dims), click Acapella (only vocals lit),
+            playhead moving the whole time. 6-10s.
+          -->
+          <div class="media-card" data-src="media/play.mp4">
+            <video muted loop playsinline preload="metadata" src="media/play.mp4"></video>
+            <div class="slot-note">
+              <span class="slot-file">media/play.mp4</span>
+              <p>Click <strong>Karaoke</strong> and watch the vocals lane go dim, click <strong>Acapella</strong> and only it stays lit, playhead moving the whole time. 6–10s loop.</p>
+              <span class="slot-spec">MP4 · H.264 · 30fps · no audio · ≤ 4MB · 1280×800</span>
+            </div>
+          </div>
+          <p class="caption-note">presets isolate each instrument</p>
         </div>
       </div>
-      <p class="caption-note">downloading → converting → separating six stems → ready</p>
     </section>
 
     <section>
-      <p class="kicker amber">Play it</p>
-      <h2>Every song, minus the singer.</h2>
-      <p class="lede">Presets do the heavy lifting: karaoke strips the voice, acapella keeps only it. Watch the lanes react as the mix transforms.</p>
+      <p class="kicker">Export</p>
+      <h2>WAVs that work with any DAW.</h2>
+      <p class="lede">Every split is saved in your library and reopens instantly. Export any stem, or all of them, as standard WAV files. Drop them straight into Ableton, Logic, FL Studio, GarageBand. No conversion, no fuss.</p>
 
-      <!-- MEDIA: media/play.mp4 · muted loop · click Karaoke (vocals lane dims), click Acapella (only vocals lit), playhead moving. 6-10s -->
-      <div class="media-card" data-src="media/play.mp4">
-        <video muted loop playsinline preload="metadata" src="media/play.mp4"></video>
-        <div class="slot-note">
-          <span class="slot-file">media/play.mp4</span>
-          <p>Click <strong>Karaoke</strong> and watch the vocals lane go dim, click <strong>Acapella</strong> and only it stays lit, playhead moving the whole time. 6–10s loop.</p>
-          <span class="slot-spec">MP4 · H.264 · 30fps · no audio · ≤ 4MB · 1280×800</span>
-        </div>
-      </div>
-      <p class="caption-note">karaoke → acapella → back, watch the lanes react</p>
-    </section>
-
-    <section>
-      <p class="kicker green">Keep it</p>
-      <h2>Every split, one click away.</h2>
-      <p class="lede">Finished songs live in your library and reopen instantly, stems and all. Export any stem, or all of them, as WAVs for your DAW.</p>
-
-      <!-- MEDIA: media/library.mp4 · muted loop · click between songs in the library, each opens instantly. 6-10s -->
+      <!--
+        MEDIA: media/library.mp4 (muted loop)
+        Record: library with several songs. Click one, it opens instantly, click a different
+        song, same thing. Then flash the export menu (Export all stems). 6-10s.
+      -->
       <div class="media-card" data-src="media/library.mp4">
         <video muted loop playsinline preload="metadata" src="media/library.mp4"></video>
         <div class="slot-note">
           <span class="slot-file">media/library.mp4</span>
-          <p>Click one song in the library, it opens <strong>instantly</strong>, click a different one, same thing. Show the variety of songs stored. 6–10s loop.</p>
+          <p>Click one song in the library, it opens <strong>instantly</strong>, click a different one, same thing, then flash the <strong>Export all stems</strong> menu. 6–10s loop.</p>
           <span class="slot-spec">MP4 · H.264 · 30fps · no audio · ≤ 4MB · 1280×800</span>
         </div>
       </div>
-      <p class="caption-note">click a song, it opens instantly with its stems · click another, same thing</p>
+      <p class="caption-note">export any stem, or all of them, as WAV</p>
+    </section>
+
+    <section>
+      <p class="kicker">Why you need this</p>
+      <h2>What would you do with the stems?</h2>
+      <dl class="facts">
+        <div class="fact">
+          <dt>Learn your instrument</dt>
+          <dd>Solo the guitar, piano or bass on any song you are studying and play along. Mute everything else and the part you are learning stops being a guessing game. Rewind a hundred times, the app never gets tired.</dd>
+        </div>
+        <div class="fact">
+          <dt>Sing</dt>
+          <dd>Any track becomes your backing band. The karaoke preset strips the vocals instantly, at home, at a party, or for the cover you have been planning to post. No per-track fees, no waiting on a service.</dd>
+        </div>
+        <div class="fact">
+          <dt>Remix and sample</dt>
+          <dd>Pull acapellas and drum loops for flips and mashups. Export as WAV, drop them into your DAW, and get to work. It runs on your machine, so your ideas never touch someone else's server.</dd>
+        </div>
+        <div class="fact">
+          <dt>Study the mix</dt>
+          <dd>Hear what the drummer actually played. Isolate the bass line you could never pick out of the mix. Solo the piano part on your favorite record and learn the voicings by ear.</dd>
+        </div>
+      </dl>
     </section>
 
     <div class="strip-wrap">
