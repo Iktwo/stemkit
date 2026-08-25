@@ -135,22 +135,31 @@
     h2 { font-size: clamp(1.7rem, 3.4vw, 2.5rem); font-weight: 600; letter-spacing: -0.03em; }
     .lede { color: var(--muted); font-size: 16.5px; margin-top: 14px; max-width: 560px; line-height: 1.6; }
 
-    .feats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-top: 56px; }
-    .feat {
-      background: var(--panel); border: 1px solid var(--line);
-      border-radius: 18px; padding: 20px 20px 28px;
+    .frow { display: grid; grid-template-columns: 5fr 6fr; gap: clamp(40px, 6vw, 80px); align-items: center; }
+    .frow.flip .txt { order: 2; }
+    .txt .accent { display: block; width: 34px; height: 3px; border-radius: 2px; margin-bottom: 22px; }
+    .txt h2 { margin-bottom: 14px; }
+    .txt > p { color: var(--muted); font-size: 15.5px; line-height: 1.7; max-width: 460px; }
+    .txt ul { margin-top: 22px; display: grid; gap: 10px; }
+    .txt li { color: var(--muted); font-size: 14px; padding-left: 20px; position: relative; list-style: none; }
+    .txt li::before {
+      content: ""; position: absolute; left: 0; top: 7px;
+      width: 6px; height: 6px; border-radius: 50%;
+      background: rgba(255, 255, 255, 0.28);
     }
-    .feat img {
-      display: block; width: 100%; aspect-ratio: 16 / 10;
-      object-fit: cover; border-radius: 10px;
-      border: 1px solid var(--line); background: #101016;
-      margin-bottom: 22px;
+    .shot {
+      margin: 0; position: relative; overflow: hidden;
+      aspect-ratio: 16 / 10; border-radius: 16px;
+      background: #101016; border: 1px solid var(--line);
+      box-shadow: 0 30px 70px rgba(0, 0, 0, 0.45);
     }
-    .feat img.hidden { display: none; }
-    .feat .accent { display: block; width: 34px; height: 3px; border-radius: 2px; margin-bottom: 16px; }
-    .feat .kicker { margin-bottom: 10px; }
-    .feat h3 { font-size: 19px; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 12px; }
-    .feat p { color: var(--muted); font-size: 14.5px; line-height: 1.65; }
+    .shot img { display: block; width: 100%; height: 100%; object-fit: cover; }
+    .shot.empty { display: flex; align-items: center; justify-content: center; border-style: dashed; box-shadow: none; background: #0d0d12; }
+    .shot.empty::after {
+      content: attr(data-file);
+      font-family: "JetBrains Mono", monospace; font-size: 12.5px;
+      color: var(--faint); letter-spacing: 0.08em;
+    }
     .caption-note { color: var(--faint); font-size: 13px; margin-top: 16px; font-family: "JetBrains Mono", monospace; text-align: center; }
 
     .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 40px; margin-top: 56px; }
@@ -184,7 +193,9 @@
     footer .links a:hover { color: var(--text); }
 
     @media (max-width: 820px) {
-      .feats, .steps, .facts, .reqs { grid-template-columns: 1fr; }
+      .steps, .facts, .reqs { grid-template-columns: 1fr; }
+      .frow { grid-template-columns: 1fr; gap: 30px; }
+      .frow.flip .txt { order: 0; }
       .hero { padding-top: 56px; }
       section { padding-top: 84px; }
     }
@@ -256,30 +267,62 @@
     </section>
 
     <section>
-      <p class="kicker">Features</p>
-      <h2>Search. Split. Export.</h2>
-      <div class="feats">
-        <div class="feat">
-          <img src="feat-search.jpg" alt="StemKit search screen" onerror="this.classList.add('hidden')" />
+      <div class="frow">
+        <div class="txt">
           <span class="accent" style="background: #a78bfa;"></span>
           <p class="kicker">Search</p>
-          <h3>Embedded YouTube search</h3>
+          <h2>Embedded YouTube search.</h2>
           <p>Type a song, click the result, and the split starts in the background. You never open a browser tab.</p>
+          <ul>
+            <li>Results appear while you type</li>
+            <li>One click sends it to split</li>
+            <li>No browser tab, ever</li>
+          </ul>
         </div>
-        <div class="feat">
-          <img src="feat-split.jpg" alt="StemKit splitting a song by instrument" onerror="this.classList.add('hidden')" />
+        <!-- drop website/feat-search.jpg and it replaces this placeholder -->
+        <figure class="shot" data-file="feat-search.jpg">
+          <img src="feat-search.jpg" alt="StemKit search screen" onerror="this.parentNode.classList.add('empty'); this.remove()" />
+        </figure>
+      </div>
+    </section>
+
+    <section>
+      <div class="frow flip">
+        <div class="txt">
           <span class="accent" style="background: #34d399;"></span>
           <p class="kicker green">Split</p>
-          <h3>Seamless stem splits by instrument</h3>
+          <h2>Seamless stem splits by instrument.</h2>
           <p>Pick vocals, drums, bass, other, plus guitar and piano. The split runs locally with live progress, and presets isolate each instrument while the playhead keeps moving.</p>
+          <ul>
+            <li>Vocals, drums, bass, other</li>
+            <li>Guitar and piano when you need them</li>
+            <li>Live progress, runs locally</li>
+          </ul>
         </div>
-        <div class="feat">
-          <img src="feat-export.jpg" alt="StemKit library and export menu" onerror="this.classList.add('hidden')" />
+        <!-- drop website/feat-split.jpg and it replaces this placeholder -->
+        <figure class="shot" data-file="feat-split.jpg">
+          <img src="feat-split.jpg" alt="StemKit splitting a song by instrument" onerror="this.parentNode.classList.add('empty'); this.remove()" />
+        </figure>
+      </div>
+    </section>
+
+    <section>
+      <div class="frow">
+        <div class="txt">
           <span class="accent" style="background: #fbbf24;"></span>
           <p class="kicker amber">Export</p>
-          <h3>Saved library + exports</h3>
+          <h2>Saved library + exports.</h2>
           <p>Every split is saved and reopens instantly. Export any stem, or all of them, as standard WAVs that drop straight into any DAW.</p>
+          <ul>
+            <li>Library remembers every split</li>
+            <li>Export any stem as WAV</li>
+            <li>Works with any DAW</li>
+          </ul>
         </div>
+        <!-- drop website/feat-export.jpg and it replaces this placeholder -->
+        <figure class="shot" data-file="feat-export.jpg">
+          <img src="feat-export.jpg" alt="StemKit library and export menu" onerror="this.parentNode.classList.add('empty'); this.remove()" />
+        </figure>
       </div>
     </section>
 
