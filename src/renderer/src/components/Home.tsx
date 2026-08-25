@@ -268,9 +268,7 @@ export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props
 
         {!hasSongs && results.length === 0 && !searching && (
           <p className="mt-8 text-center text-xs text-white/25 leading-relaxed">
-            First run installs the separation engine (~2 GB, one time).
-            <br />
-            After that, a 4-minute song takes about a minute to split.
+            A 4-minute song takes about a minute to split.
           </p>
         )}
       </div>
