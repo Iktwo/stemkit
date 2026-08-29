@@ -151,18 +151,6 @@
     .pbox:nth-child(3) { margin-top: 88px; }
     .pbox:nth-child(4) { margin-top: 132px; }
     section.uses { position: relative; }
-    .waves {
-      position: absolute; top: 0; bottom: 0;
-      left: 50%; transform: translateX(-50%);
-      width: 100vw; overflow: hidden;
-      pointer-events: none; z-index: 0;
-    }
-    .waves svg { width: 100%; height: 100%; display: block; }
-    .wave {
-      fill: none; stroke-width: 2;
-      vector-effect: non-scaling-stroke;
-      filter: blur(7px);
-    }
     .feathers {
       position: absolute; top: 0; bottom: 0;
       left: 50%; transform: translateX(-50%);
@@ -336,22 +324,6 @@
     </section>
 
     <section class="uses">
-      <div class="waves" aria-hidden="true">
-        <svg viewBox="0 0 1440 480" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
-          <path class="wave" style="stroke: #a78bfa; opacity: 0.4;"
-            d="M-160 260 Q -80 165 0 260 T 240 260 T 480 260 T 720 260 T 960 260 T 1200 260 T 1440 260 T 1680 260" />
-          <path class="wave" style="stroke: #60a5fa; opacity: 0.34;"
-            d="M-160 320 Q -80 470 0 320 T 240 320 T 480 320 T 720 320 T 960 320 T 1200 320 T 1440 320 T 1680 320" />
-          <path class="wave" style="stroke: #fbbf24; opacity: 0.3;"
-            d="M-160 205 Q -80 130 0 205 T 240 205 T 480 205 T 720 205 T 960 205 T 1200 205 T 1440 205 T 1680 205" />
-          <path class="wave" style="stroke: #f87171; opacity: 0.26;"
-            d="M-160 150 Q -80 235 0 150 T 240 150 T 480 150 T 720 150 T 960 150 T 1200 150 T 1440 150 T 1680 150" />
-          <path class="wave" style="stroke: #34d399; opacity: 0.3;"
-            d="M-160 400 Q -80 330 0 400 T 240 400 T 480 400 T 720 400 T 960 400 T 1200 400 T 1440 400 T 1680 400" />
-          <path class="wave" style="stroke: #a78bfa; opacity: 0.2;"
-            d="M-160 95 Q -80 45 0 95 T 240 95 T 480 95 T 720 95 T 960 95 T 1200 95 T 1440 95 T 1680 95" />
-        </svg>
-      </div>
       <div class="boxes">
         <div class="pbox">
           <span class="pico" style="--c: #a78bfa;"><i data-lucide="headphones"></i></span>
