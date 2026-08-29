@@ -77,10 +77,6 @@ function runtimeDownloadUrl(): string {
   )
 }
 
-function venvPip(): string {
-  return join(venvDir(), VENV_BIN, 'pip' + EXE)
-}
-
 export function bundledFfmpeg(): string | null {
   const name = 'ffmpeg' + EXE
   const candidates = app.isPackaged
@@ -348,7 +344,11 @@ function downloadTo(url: string, dest: string, label: string): Promise<void> {
 function extractArchive(archive: string, dest: string): Promise<void> {
   return new Promise((resolve, reject) => {
     mkdirSync(dest, { recursive: true })
-    const child = spawn('tar', ['-xzf', archive, '-C', dest], { stdio: 'ignore' })
+    // GNU tar (e.g. Git for Windows) treats "C:\..." as a remote host and dies
+    // with "Cannot connect to C: resolve failed". Prefer Windows built-in bsdtar.
+    const sys32Tar = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe')
+    const tarBin = IS_WIN && existsSync(sys32Tar) ? sys32Tar : 'tar'
+    const child = spawn(tarBin, ['-xzf', archive, '-C', dest], { stdio: 'ignore' })
     child.on('close', (code) =>
       code === 0 ? resolve() : reject(new Error(`extract failed (${code})`))
     )
@@ -401,7 +401,7 @@ export async function bootstrap(): Promise<boolean> {
 
   try {
     const venv = venvDir()
-    const pip = venvPip()
+    const pip = venvPython()
 
     sendEnvEvent('Preparing workspace')
     await new Promise<void>((resolve, reject) => {
@@ -413,7 +413,7 @@ export async function bootstrap(): Promise<boolean> {
     })
 
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(pip, ['install', '-q', '-U', 'pip', 'wheel', 'setuptools'])
+      const child = spawn(pip, ['-m', 'pip', 'install', '-q', '-U', 'pip', 'wheel', 'setuptools'])
       child.on('close', (code) =>
         code === 0 ? resolve() : reject(new Error(`pip upgrade failed (${code})`))
       )
@@ -424,6 +424,8 @@ export async function bootstrap(): Promise<boolean> {
     let lastGeneric = 0
     await new Promise<void>((resolve, reject) => {
       const child = spawn(pip, [
+        '-m',
+        'pip',
         'install',
         '--progress-bar',
         'off',
@@ -463,7 +465,7 @@ export async function bootstrap(): Promise<boolean> {
     })
 
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(pip, ['install', '-q', 'yt-dlp-ejs'])
+      const child = spawn(pip, ['-m', 'pip', 'install', '-q', 'yt-dlp-ejs'])
       child.on('close', (code) =>
         code === 0 ? resolve() : reject(new Error(`solver install failed (${code})`))
       )
@@ -488,7 +490,9 @@ export async function updateYtDlp(): Promise<boolean> {
   try {
     sendEnvEvent('Updating yt-dlp...')
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(venvPip(), [
+      const child = spawn(venvPython(), [
+        '-m',
+        'pip',
         'install',
         '-q',
         '-U',

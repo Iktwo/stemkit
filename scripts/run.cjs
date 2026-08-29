@@ -104,9 +104,10 @@ function resolveBin(name) {
 function runSteps(steps) {
   for (const [bin, ...args] of steps) {
     const resolved = resolveBin(bin)
-    const r = spawnSync(resolved, args, {
+    const useShell = IS_WIN && resolved.toLowerCase().endsWith('.cmd')
+    const r = spawnSync(useShell ? `"${resolved}"` : resolved, args, {
       stdio: 'inherit',
-      shell: IS_WIN && resolved.toLowerCase().endsWith('.cmd')
+      shell: useShell
     })
     if (r.status !== 0) process.exit(r.status ?? 1)
   }
