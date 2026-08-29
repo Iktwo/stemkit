@@ -430,8 +430,8 @@ export async function bootstrap(): Promise<boolean> {
         '--progress-bar',
         'off',
         'demucs==4.0.1',
-        'torch==2.5.1',
-        'torchaudio==2.5.1',
+         'torch>=2.5.1',
+        'torchaudio>=2.5.1',
         'numpy<2',
         'yt-dlp'
       ])
