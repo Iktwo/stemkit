@@ -10,7 +10,7 @@ import {
   refreshReady,
   getStatus
 } from './env'
-import { loadSongs, removeSong, stemBuffers, stemsDir, stemsFor } from './library'
+import { loadSongs, removeSong, stemBuffers, stemsDir, stemsFor, mixWavPath } from './library'
 import { startJob, cancelJob, searchYouTube } from './pipeline'
 import { initUpdater } from './updater'
 
@@ -161,7 +161,13 @@ app.whenReady().then(async () => {
     for (const name of list) {
       copyFileSync(join(dir, `${name}.wav`), join(target, `${name}.wav`))
     }
-    return { saved: true, path: target, count: list.length }
+    let count = list.length
+    const mix = mixWavPath(videoId)
+    if (existsSync(mix)) {
+      copyFileSync(mix, join(target, `${sanitizeName(song?.title ?? 'full track')}.wav`))
+      count += 1
+    }
+    return { saved: true, path: target, count }
   })
 
   ipcMain.handle('search:youtube', (_e, query: string) => searchYouTube(query))

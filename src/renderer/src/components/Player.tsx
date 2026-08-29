@@ -288,10 +288,7 @@ export function Player({ song }: Props): React.ReactElement {
   return (
     <div className="h-full flex flex-col">
       <header className="drag-region h-14 shrink-0 flex items-center justify-between px-6">
-        <h2 className="text-sm font-semibold truncate max-w-md">{song.title}</h2>
-        <span className="text-[11px] text-white/30 font-medium tracking-wide uppercase">
-          {ytReady && !decoding ? 'synced to youtube · local stems' : ''}
-        </span>
+        <h2 className="text-sm font-semibold truncate">{song.title}</h2>
       </header>
 
       <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-6">
@@ -352,7 +349,7 @@ export function Player({ song }: Props): React.ReactElement {
                   className="no-drag glass rounded-xl px-5 py-3 text-[13px] font-medium text-white/70 hover:text-white hover:bg-white/10 transition-colors flex items-center gap-2 disabled:opacity-40"
                 >
                   <DownloadIcon className="w-4 h-4" />
-                  Export all stems
+                  Export everything
                 </button>
                 <button
                   onClick={() => window.stemkit.openExternal(youtubeUrl)}
