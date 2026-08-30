@@ -258,7 +258,7 @@ export async function detectTools(): Promise<void> {
       const [version, machine] = out.trim().split(/\s+/)
       const minor = parseInt(version.split('.')[1], 10)
       const major = parseInt(version.split('.')[0], 10)
-      if (major > 3 || (major === 3 && minor >= 9)) {
+      if (major > 3 || (major === 3 && minor >= 9 && minor <= 12)) { 
         probes.push({ path: candidate, version, machine: machine ?? 'unknown' })
       }
     } catch {
@@ -430,8 +430,8 @@ export async function bootstrap(): Promise<boolean> {
         '--progress-bar',
         'off',
         'demucs==4.0.1',
-         'torch>=2.5.1',
-        'torchaudio>=2.5.1',
+         'torch==2.5.1',
+        'torchaudio==2.5.1',
         'numpy<2',
         'yt-dlp'
       ])
