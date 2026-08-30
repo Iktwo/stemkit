@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'child_process'
 import { createInterface } from 'readline'
-import { readdirSync, mkdirSync, rmSync } from 'fs'
+import { readdirSync, mkdirSync, rmSync, existsSync } from 'fs'
 import { join } from 'path'
 import { BrowserWindow } from 'electron'
 import {
@@ -80,8 +80,9 @@ export function extractVideoId(url: string): string | null {
 
 export async function startJob(
   rawUrl: string,
-  model = 'htdemucs',
-  stems?: string[]
+  model = 'bs_roformer',
+  stems?: string[],
+  force = false
 ): Promise<void> {
   const url = rawUrl.trim()
   const videoId = parseVideoId(url)
@@ -104,6 +105,7 @@ export async function startJob(
   try {
     const existing = loadSongs().find((s) => s.videoId === videoId)
     const covered =
+      !force &&
       existing &&
       existing.model === model &&
       !!existing.stems?.length &&
@@ -112,96 +114,105 @@ export async function startJob(
       send({ kind: 'done', data: { videoId, song: existing } })
       return
     }
-    if (existing && (existing.model !== model || !stemsPresent(videoId, stemsFor(existing)))) {
-      rmSync(songDir(videoId), { recursive: true, force: true })
-    }
 
     mkdirSync(songDir(videoId), { recursive: true })
-    progress(job, 'metadata', 0, 'Reading video info')
 
-    let raw = ''
-    await runProcess(job, venvYtDlp(), [...ytDlpRuntimeArgs(), '-J', '--no-playlist', '--skip-download', url], {
-      onStdout: (chunk) => {
-        raw += chunk
-      }
-    })
     let meta: { title: string; duration: number }
-    try {
-      const parsed = JSON.parse(raw)
-      meta = {
-        title: typeof parsed.title === 'string' ? parsed.title : 'Unknown title',
-        duration: typeof parsed.duration === 'number' ? Math.round(parsed.duration) : 0
-      }
-    } catch {
-      bail('Could not read video metadata')
-    }
-    if (job.cancelled || !jobs.has(videoId)) return
-    job.title = meta!.title
-    progress(job, 'metadata', 100, meta!.title)
+    const hasMixWav = existsSync(mixWavPath(videoId))
 
-    progress(job, 'download', 0, 'Downloading audio from YouTube')
-    let maxPct = 0
-    await runProcess(
-      job,
-      venvYtDlp(),
-      [
-        ...ytDlpRuntimeArgs(),
-        '-f',
-        'bestaudio[ext=m4a]/bestaudio/best',
-        '--no-playlist',
-        '-o',
-        rawDownloadPath(videoId),
-        url
-      ],
-      {
+    if (existing && hasMixWav && existing.title) {
+      meta = { title: existing.title, duration: existing.duration || 0 }
+      job.title = meta.title
+      progress(job, 'metadata', 100, meta.title)
+    } else {
+      progress(job, 'metadata', 0, 'Reading video info')
+
+      let raw = ''
+      await runProcess(job, venvYtDlp(), [...ytDlpRuntimeArgs(), '-J', '--no-playlist', '--skip-download', url], {
         onStdout: (chunk) => {
-          for (const piece of chunk.split(/[\r\n]/)) {
-            const m = piece.match(/(\d+(?:\.\d+)?)%/)
-            if (m) {
-              const pct = parseFloat(m[1])
-              if (pct > maxPct && pct <= 100) {
-                maxPct = pct
-                progress(job, 'download', pct)
+          raw += chunk
+        }
+      })
+      try {
+        const parsed = JSON.parse(raw)
+        meta = {
+          title: typeof parsed.title === 'string' ? parsed.title : 'Unknown title',
+          duration: typeof parsed.duration === 'number' ? Math.round(parsed.duration) : 0
+        }
+      } catch {
+        bail('Could not read video metadata')
+      }
+      if (job.cancelled || !jobs.has(videoId)) return
+      job.title = meta!.title
+      progress(job, 'metadata', 100, meta!.title)
+
+      progress(job, 'download', 0, 'Downloading audio from YouTube')
+      let maxPct = 0
+      await runProcess(
+        job,
+        venvYtDlp(),
+        [
+          ...ytDlpRuntimeArgs(),
+          '-f',
+          'bestaudio[ext=m4a]/bestaudio/best',
+          '--no-playlist',
+          '-o',
+          rawDownloadPath(videoId),
+          url
+        ],
+        {
+          onStdout: (chunk) => {
+            for (const piece of chunk.split(/[\r\n]/)) {
+              const m = piece.match(/(\d+(?:\.\d+)?)%/)
+              if (m) {
+                const pct = parseFloat(m[1])
+                if (pct > maxPct && pct <= 100) {
+                  maxPct = pct
+                  progress(job, 'download', pct)
+                }
               }
             }
           }
         }
-      }
-    )
-    if (job.cancelled || !jobs.has(videoId)) return
+      )
+      if (job.cancelled || !jobs.has(videoId)) return
 
-    const dir = songDir(videoId)
-    const rawFile = readdirSync(dir).find((f) => f.startsWith('raw.'))
-    if (!rawFile) bail('Download produced no file')
-    const rawPath = join(dir, rawFile as string)
+      const dir = songDir(videoId)
+      const rawFile = readdirSync(dir).find((f) => f.startsWith('raw.'))
+      if (!rawFile) bail('Download produced no file')
+      const rawPath = join(dir, rawFile as string)
 
-    progress(job, 'convert', 0, 'Converting to WAV')
-    const ffmpeg = getStatus().ffmpeg.path
-    if (!ffmpeg) bail('Something went wrong with the built-in audio tools. Try reinstalling StemKit.')
-    await runProcess(job, ffmpeg as string, [
-      '-y',
-      '-i',
-      rawPath,
-      '-ar',
-      '44100',
-      '-ac',
-      '2',
-      '-c:a',
-      'pcm_s16le',
-      mixWavPath(videoId)
-    ])
-    rmSync(rawPath, { force: true })
-    if (job.cancelled || !jobs.has(videoId)) return
-    progress(job, 'convert', 100)
+      progress(job, 'convert', 0, 'Converting to WAV')
+      const ffmpeg = getStatus().ffmpeg.path
+      if (!ffmpeg) bail('Something went wrong with the built-in audio tools. Try reinstalling StemKit.')
+      await runProcess(job, ffmpeg as string, [
+        '-y',
+        '-i',
+        rawPath,
+        '-ar',
+        '44100',
+        '-ac',
+        '2',
+        '-c:a',
+        'pcm_s16le',
+        mixWavPath(videoId)
+      ])
+      rmSync(rawPath, { force: true })
+      if (job.cancelled || !jobs.has(videoId)) return
+      progress(job, 'convert', 100)
+    }
 
+    rmSync(stemsDir(videoId), { recursive: true, force: true })
     mkdirSync(stemsDir(videoId), { recursive: true })
     progress(
       job,
       'separate',
       0,
-      job.model === 'htdemucs_6s'
-        ? 'Waiting for a free engine slot…'
-        : 'Waiting for a free engine slot… (first runs also download models)'
+      job.model.includes('roformer')
+        ? 'Waiting for a free engine slot… (BS-RoFormer SOTA)'
+        : job.model === 'htdemucs_6s'
+          ? 'Waiting for a free engine slot…'
+          : 'Waiting for a free engine slot… (first runs also download models)'
     )
 
     const release = await acquireSeparation()

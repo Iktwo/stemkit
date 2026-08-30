@@ -2,8 +2,9 @@ export type StemId = 'vocals' | 'drums' | 'bass' | 'other' | 'piano' | 'guitar'
 
 export const DEFAULT_STEMS: string[] = ['vocals', 'drums', 'bass', 'other']
 
-export const MODEL_STANDARD = 'htdemucs'
-export const MODEL_EXTENDED = 'htdemucs_6s'
+export const MODEL_STANDARD = 'htdemucs_ft'
+export const MODEL_EXTENDED = 'bs_roformer'
+export const MODEL_ROFORMER = 'bs_roformer'
 
 export interface Song {
   videoId: string
@@ -76,7 +77,7 @@ export interface StemKitApi {
   exportStem(videoId: string, stem: string): Promise<{ saved: boolean; path?: string }>
   exportAllStems(videoId: string): Promise<{ saved: boolean; path?: string; count?: number }>
   searchYouTube(query: string): Promise<SearchResult[]>
-  startJob(url: string, model?: string, stems?: string[]): Promise<{ started: boolean }>
+  startJob(url: string, model?: string, stems?: string[], force?: boolean): Promise<{ started: boolean }>
   cancelJob(videoId?: string): Promise<void>
   openExternal(url: string): Promise<void>
   getAppVersion(): Promise<string>

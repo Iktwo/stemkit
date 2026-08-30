@@ -82,7 +82,7 @@ Without these secrets CI falls back to ad-hoc signing (app runs, but Gatekeeper 
 ## How it works
 
 ```
-YouTube URL ──► yt-dlp (+JS runtime) ──► bundled ffmpeg ──► demucs htdemucs ──► stems/*.wav
+YouTube URL ──► yt-dlp (+JS runtime) ──► bundled ffmpeg ──► BS-RoFormer / Demucs FT ──► stems/*.wav
                                         │
 Electron renderer ◄──── IPC events ─────┘
 video iframe (muted) + Web Audio stem playback · master clock = the audio itself

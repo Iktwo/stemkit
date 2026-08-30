@@ -123,8 +123,8 @@ app.whenReady().then(async () => {
     return stemBuffers(videoId, song?.stems)
   })
 
-  ipcMain.handle('jobs:start', async (_e, url: string, model?: string, stems?: string[]) => {
-    void startJob(url, model, stems)
+  ipcMain.handle('jobs:start', async (_e, url: string, model?: string, stems?: string[], force?: boolean) => {
+    void startJob(url, model, stems, force)
     return { started: true }
   })
   ipcMain.handle('jobs:cancel', (_e, videoId?: string) => cancelJob(videoId))

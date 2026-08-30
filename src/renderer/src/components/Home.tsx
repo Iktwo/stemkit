@@ -146,8 +146,8 @@ export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props
               {selected.size === 0
                 ? 'select at least one'
                 : usesExtended
-                  ? `6-source engine · ${selected.size} stems`
-                  : `4-source engine · ${selected.size} stems`}
+                  ? `BS-RoFormer (SOTA 6-source) · ${selected.size} stems`
+                  : `Demucs FT (4-source) · ${selected.size} stems`}
             </span>
           </div>
           <div className="flex items-center gap-1.5 flex-wrap">

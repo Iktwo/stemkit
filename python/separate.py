@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import sys
 import time
 import wave
@@ -50,21 +51,135 @@ def save_wav(path, data, sr):
         w.writeframes(pcm.tobytes())
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--input", required=True)
-    parser.add_argument("--out", required=True)
-    parser.add_argument("--model", default="htdemucs")
-    parser.add_argument("--device", default="auto")
-    parser.add_argument("--shifts", type=int, default=1)
-    parser.add_argument("--overlap", type=float, default=0.25)
-    parser.add_argument("--only", default="")
-    args = parser.parse_args()
+def separate_roformer(audio, sr, out_dir, wanted, device_name="auto"):
+    import torch
+    import torch.nn as nn
+    import yaml
+    from ml_collections import ConfigDict
+    from bs_roformer import ensure_model_assets, DEFAULT_MODEL
+    from bs_roformer.utils import get_model_from_config, get_windowing_array
+    from bs_roformer.inference import SafeLoaderWithTuple
 
+    if device_name == "auto":
+        device_str = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        device_str = device_name
+
+    device = torch.device(device_str)
+    emit(type="progress", stage="model", pct=0, message=f"loading BS-RoFormer (SOTA 6-stem) on {device_str}")
+
+    try:
+        ckpt_path, cfg_path = ensure_model_assets(DEFAULT_MODEL)
+        with open(cfg_path) as f:
+            config = ConfigDict(yaml.load(f, Loader=SafeLoaderWithTuple))
+        model = get_model_from_config("bs_roformer", config)
+        state_dict = torch.load(ckpt_path, map_location="cpu")
+        model.load_state_dict(state_dict)
+        model.to(device)
+        model.eval()
+    except Exception as e:
+        fail(f"BS-RoFormer load failed: {e}")
+
+    target_sr = 44100
+    if sr != target_sr:
+        t = torch.from_numpy(audio)
+        t = torch.nn.functional.interpolate(
+            t.unsqueeze(0), scale_factor=target_sr / sr, mode="linear", align_corners=False
+        ).squeeze(0)
+        audio = t.numpy()
+        sr = target_sr
+
+    if audio.shape[0] == 1:
+        audio = np.repeat(audio, 2, axis=0)
+
+    instruments = config.training.instruments
+    C = getattr(config.inference, "chunk_size", 588800)
+    N = getattr(config.inference, "num_overlap", 2)
+    step = C // N
+    fade_size = C // 10
+    border = C - step
+
+    def run_demix(dev):
+        mix_t = torch.tensor(audio, dtype=torch.float32)
+        if mix_t.shape[1] > 2 * border and border > 0:
+            mix_t = nn.functional.pad(mix_t, (border, border), mode="reflect")
+
+        win_arr = get_windowing_array(C, fade_size, dev)
+        req_shape = (len(instruments),) + tuple(mix_t.shape)
+
+        mix_dev = mix_t.to(dev)
+        res = torch.zeros(req_shape, dtype=torch.float32, device=dev)
+        cnt = torch.zeros(req_shape, dtype=torch.float32, device=dev)
+
+        total_len = mix_dev.shape[1]
+        cur = 0
+        last_report = 0.0
+
+        emit(type="progress", stage="separate", pct=0, message="separating stems with BS-RoFormer")
+
+        with torch.no_grad():
+            while cur < total_len:
+                part = mix_dev[:, cur : cur + C]
+                length = part.shape[-1]
+                if length < C:
+                    if length > C // 2 + 1:
+                        part = nn.functional.pad(input=part, pad=(0, C - length), mode="reflect")
+                    else:
+                        part = nn.functional.pad(input=part, pad=(0, C - length, 0, 0), mode="constant", value=0)
+
+                x = model(part.unsqueeze(0))[0]
+                window = win_arr.clone()
+                if cur == 0:
+                    window[:fade_size] = 1
+                elif cur + C >= total_len:
+                    window[-fade_size:] = 1
+
+                res[..., cur : cur + length] += x[..., :length] * window[..., :length]
+                cnt[..., cur : cur + length] += window[..., :length]
+                cur += step
+
+                now = time.time()
+                pct = int(min(1.0, cur / total_len) * 100)
+                if now - last_report >= 0.5 or pct == 100:
+                    emit(type="progress", stage="separate", pct=pct)
+                    last_report = now
+
+        est = (res / cnt).cpu().numpy()
+        np.nan_to_num(est, copy=False, nan=0.0)
+        if mix_t.shape[1] > 2 * border and border > 0:
+            est = est[..., border:-border]
+        return est
+
+    try:
+        sources = run_demix(device)
+    except Exception as e:
+        if device_str == "mps":
+            emit(type="progress", stage="separate", pct=0, message=f"mps failed ({e}), falling back to cpu")
+            device = torch.device("cpu")
+            model.to(device)
+            sources = run_demix(device)
+        else:
+            fail(f"separation failed: {e}")
+
+    os.makedirs(out_dir, exist_ok=True)
+    written = []
+    for idx, name in enumerate(instruments):
+        if wanted is not None and name not in wanted:
+            continue
+        stem_path = os.path.join(out_dir, f"{name}.wav")
+        save_wav(stem_path, sources[idx], sr)
+        written.append(name)
+        emit(type="stem", name=name)
+
+    emit(type="done", stems=written, out_dir=out_dir)
+
+
+def separate_demucs(audio, sr, out_dir, model_name, wanted, device_name="auto", shifts=1, overlap=0.25):
     import torch
     import types
-
     import demucs.apply as dapply
+    from demucs.apply import apply_model
+    from demucs.pretrained import get_model
 
     raw_tqdm = dapply.tqdm
     is_module = not hasattr(raw_tqdm, "update")
@@ -95,23 +210,19 @@ def main():
 
     dapply.tqdm = types.SimpleNamespace(tqdm=ProgressTqdm) if is_module else ProgressTqdm
 
-    if args.device == "auto":
-        device = "mps" if torch.backends.mps.is_available() else "cpu"
+    if device_name == "auto":
+        device = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
     else:
-        device = args.device
-    emit(type="progress", stage="model", pct=0, message=f"loading {args.model} on {device}")
-
-    from demucs.apply import apply_model
-    from demucs.pretrained import get_model
+        device = device_name
+    emit(type="progress", stage="model", pct=0, message=f"loading {model_name} on {device}")
 
     try:
-        model = get_model(args.model)
+        model = get_model(model_name)
     except Exception as e:
         fail(f"model load failed: {e}")
     model.to(device)
     model.eval()
 
-    audio, sr = load_wav(args.input)
     target_sr = model.samplerate
     if sr != target_sr:
         t = torch.from_numpy(audio)
@@ -131,9 +242,9 @@ def main():
             model,
             mix,
             device=device,
-            shifts=args.shifts,
+            shifts=shifts,
             split=True,
-            overlap=args.overlap,
+            overlap=overlap,
             progress=True,
         )
     except Exception as e:
@@ -151,38 +262,65 @@ def main():
                 model,
                 mix,
                 device=device,
-                shifts=args.shifts,
+                shifts=shifts,
                 split=True,
-                overlap=args.overlap,
+                overlap=overlap,
                 progress=True,
             )
         else:
             fail(f"separation failed: {e}")
 
-    import os
-
-    wanted = None
-    if args.only:
-        wanted = [s.strip() for s in args.only.split(",") if s.strip()]
-        unknown = [s for s in wanted if s not in model.sources]
-        if unknown:
-            fail(f"unknown stems requested: {', '.join(unknown)}")
-        if not wanted:
-            fail("no valid stems requested")
-        emit(type="progress", stage="separate", pct=0, message=f"writing {len(wanted)} stems")
-
-    os.makedirs(args.out, exist_ok=True)
     out_cpu = sources[0].cpu().numpy()
+    os.makedirs(out_dir, exist_ok=True)
     written = []
     for i, name in enumerate(model.sources):
         if wanted is not None and name not in wanted:
             continue
-        path = os.path.join(args.out, f"{name}.wav")
+        path = os.path.join(out_dir, f"{name}.wav")
         save_wav(path, out_cpu[i], sr)
         written.append(name)
         emit(type="stem", name=name)
 
-    emit(type="done", stems=written, out_dir=args.out)
+    emit(type="done", stems=written, out_dir=out_dir)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input", required=True)
+    parser.add_argument("--out", required=True)
+    parser.add_argument("--model", default="bs_roformer")
+    parser.add_argument("--device", default="auto")
+    parser.add_argument("--shifts", type=int, default=1)
+    parser.add_argument("--overlap", type=float, default=0.25)
+    parser.add_argument("--only", default="")
+    args = parser.parse_args()
+
+    audio, sr = load_wav(args.input)
+
+    wanted = None
+    if args.only:
+        wanted = [s.strip() for s in args.only.split(",") if s.strip()]
+
+    is_roformer = "roformer" in args.model.lower()
+
+    if is_roformer:
+        valid_sources = ["bass", "drums", "other", "vocals", "guitar", "piano"]
+        if wanted:
+            unknown = [s for s in wanted if s not in valid_sources]
+            if unknown:
+                fail(f"unknown stems requested: {', '.join(unknown)}")
+        separate_roformer(audio, sr, args.out, wanted, device_name=args.device)
+    else:
+        separate_demucs(
+            audio,
+            sr,
+            args.out,
+            model_name=args.model,
+            wanted=wanted,
+            device_name=args.device,
+            shifts=args.shifts,
+            overlap=args.overlap,
+        )
 
 
 if __name__ == "__main__":

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { EnvStatus, JobProgress, JobStage, Song, UpdateEvent } from '../../shared/types'
+import { MODEL_EXTENDED, type EnvStatus, type JobProgress, type JobStage, type Song, type UpdateEvent } from '../../shared/types'
 import { parseVideoId } from '../../shared/url'
 import { Sidebar } from './components/Sidebar'
 import { Home } from './components/Home'
 import { Processing } from './components/Processing'
-import { Player } from './components/Player'
+import { Player, clearBufferCache } from './components/Player'
 import { Setup } from './components/Setup'
 import { LogoMark } from './components/Icons'
 
@@ -40,7 +40,7 @@ export default function App(): React.ReactElement {
   const [jobs, setJobs] = useState<Record<string, JobProgress>>({})
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [lastUrl, setLastUrl] = useState('')
-  const [lastModel, setLastModel] = useState('htdemucs')
+  const [lastModel, setLastModel] = useState(MODEL_EXTENDED)
   const [envLogs, setEnvLogs] = useState<EnvLog[]>([])
   const [update, setUpdate] = useState<UpdateEvent | null>(null)
   const [appVersion, setAppVersion] = useState<string | undefined>(undefined)
@@ -53,6 +53,7 @@ export default function App(): React.ReactElement {
         setJobs((prev) => ({ ...prev, [ev.data.videoId]: ev.data }))
         setErrors((prev) => (prev[ev.data.videoId] ? withoutKey(prev, ev.data.videoId) : prev))
       } else if (ev.kind === 'done') {
+        clearBufferCache(ev.data.videoId)
         setJobs((prev) => withoutKey(prev, ev.data.videoId))
         setErrors((prev) => withoutKey(prev, ev.data.videoId))
         void window.stemkit.listSongs().then(setSongs)
@@ -82,7 +83,7 @@ export default function App(): React.ReactElement {
   }, [status?.ready])
 
   const startUrl = useCallback(
-    async (url: string, model = 'htdemucs', stems?: string[]): Promise<void> => {
+    async (url: string, model = MODEL_EXTENDED, stems?: string[], force = false): Promise<void> => {
       const vid = parseVideoId(url)
       if (!vid) return
       setLastUrl(url)
@@ -93,9 +94,18 @@ export default function App(): React.ReactElement {
           ? prev
           : { ...prev, [vid]: { videoId: vid, stage: 'metadata', pct: 0, message: 'Starting…', model } }
       )
-      await window.stemkit.startJob(url, model, stems)
+      await window.stemkit.startJob(url, model, stems, force)
     },
     []
+  )
+
+  const handleReprocess = useCallback(
+    async (videoId: string, model: string, stems: string[]): Promise<void> => {
+      const url = `https://www.youtube.com/watch?v=${videoId}`
+      clearBufferCache(videoId)
+      await startUrl(url, model, stems, true)
+    },
+    [startUrl]
   )
 
   const cancelSelectedJob = useCallback(
@@ -214,7 +224,7 @@ export default function App(): React.ReactElement {
       />
     )
   } else if (activeSong) {
-    main = <Player key={activeSong.videoId} song={activeSong} />
+    main = <Player key={activeSong.videoId} song={activeSong} onReprocess={handleReprocess} />
   } else {
     main = (
       <Home
