@@ -31,29 +31,17 @@ interface ActiveJob {
   proc?: ChildProcess
 }
 
+interface QueuedItem {
+  url: string
+  videoId: string
+  model: string
+  stems?: string[]
+  force?: boolean
+}
+
 const jobs = new Map<string, ActiveJob>()
-
-const MAX_CONCURRENT_SEPARATIONS = 2
-let activeSeparations = 0
-const separationWaiters: Array<() => void> = []
-
-function acquireSeparation(): Promise<() => void> {
-  if (activeSeparations < MAX_CONCURRENT_SEPARATIONS) {
-    activeSeparations++
-    return Promise.resolve(releaseSeparation)
-  }
-  return new Promise((resolve) => {
-    separationWaiters.push(() => {
-      activeSeparations++
-      resolve(releaseSeparation)
-    })
-  })
-}
-
-function releaseSeparation(): void {
-  activeSeparations--
-  separationWaiters.shift()?.()
-}
+const queue: QueuedItem[] = []
+let currentRunningJob: ActiveJob | null = null
 
 function send(ev: JobEvent): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -78,25 +66,18 @@ export function extractVideoId(url: string): string | null {
   return parseVideoId(url)
 }
 
-export async function startJob(
-  rawUrl: string,
-  model = 'bs_roformer',
-  stems?: string[],
-  force = false
-): Promise<void> {
-  const url = rawUrl.trim()
-  const videoId = parseVideoId(url)
-  if (!videoId) {
-    send({ kind: 'failed', data: { videoId: '', message: 'Could not parse a YouTube URL or video id out of that' } })
-    return
-  }
-  if (jobs.has(videoId)) {
-    send({ kind: 'failed', data: { videoId, message: 'This song is already being processed' } })
-    return
-  }
+function updateQueuePositions(): void {
+  queue.forEach((item, index) => {
+    const queuedJob = jobs.get(item.videoId)
+    if (queuedJob && !queuedJob.cancelled) {
+      progress(queuedJob, 'metadata', 0, `In queue (position #${index + 1})`)
+    }
+  })
+}
 
-  const job: ActiveJob = { videoId, model, cancelled: false }
-  jobs.set(videoId, job)
+async function executeJob(job: ActiveJob, url: string, stems?: string[]): Promise<void> {
+  currentRunningJob = job
+  const videoId = job.videoId
 
   const bail = (message: string): never => {
     throw Object.assign(new Error(message), { videoId })
@@ -104,16 +85,6 @@ export async function startJob(
 
   try {
     const existing = loadSongs().find((s) => s.videoId === videoId)
-    const covered =
-      !force &&
-      existing &&
-      existing.model === model &&
-      !!existing.stems?.length &&
-      (stems?.length ? stems.every((s) => existing.stems!.includes(s)) : true)
-    if (covered && stemsPresent(videoId, stemsFor(existing))) {
-      send({ kind: 'done', data: { videoId, song: existing } })
-      return
-    }
 
     mkdirSync(songDir(videoId), { recursive: true })
 
@@ -209,75 +180,70 @@ export async function startJob(
       'separate',
       0,
       job.model.includes('roformer')
-        ? 'Waiting for a free engine slot… (BS-RoFormer SOTA)'
+        ? 'Preparing BS-RoFormer SOTA engine…'
         : job.model === 'htdemucs_6s'
-          ? 'Waiting for a free engine slot…'
-          : 'Waiting for a free engine slot… (first runs also download models)'
+          ? 'Preparing Demucs 6-source engine…'
+          : 'Preparing Demucs engine…'
     )
 
-    const release = await acquireSeparation()
-    try {
-      if (job.cancelled || !jobs.has(videoId)) return
-      progress(job, 'separate', 0, 'Separating stems')
-      let scriptError: string | null = null
-      let producedStems: string[] | null = null
-      await runProcess(
-        job,
-        venvPython(),
-        [
-          separateScript(),
-          '--input',
-          mixWavPath(videoId),
-          '--out',
-          stemsDir(videoId),
-          '--model',
-          job.model,
-          '--device',
-          'auto',
-          ...(stems?.length ? ['--only', stems.join(',')] : [])
-        ],
-        {
-          onLine: (line) => {
-            let parsed: Record<string, unknown>
-            try {
-              parsed = JSON.parse(line)
-            } catch {
-              return
-            }
-            if (parsed.type === 'progress') {
-              progress(
-                job,
-                'separate',
-                Number(parsed.pct ?? 0),
-                typeof parsed.message === 'string' ? parsed.message : undefined
-              )
-            } else if (parsed.type === 'error') {
-              scriptError = `Separation failed: ${String(parsed.message)}`
-            } else if (parsed.type === 'done' && Array.isArray(parsed.stems)) {
-              producedStems = (parsed.stems as unknown[]).map(String)
-            }
+    if (job.cancelled || !jobs.has(videoId)) return
+    progress(job, 'separate', 0, 'Separating stems')
+    let scriptError: string | null = null
+    let producedStems: string[] | null = null
+    await runProcess(
+      job,
+      venvPython(),
+      [
+        separateScript(),
+        '--input',
+        mixWavPath(videoId),
+        '--out',
+        stemsDir(videoId),
+        '--model',
+        job.model,
+        '--device',
+        'auto',
+        ...(stems?.length ? ['--only', stems.join(',')] : [])
+      ],
+      {
+        onLine: (line) => {
+          let parsed: Record<string, unknown>
+          try {
+            parsed = JSON.parse(line)
+          } catch {
+            return
+          }
+          if (parsed.type === 'progress') {
+            progress(
+              job,
+              'separate',
+              Number(parsed.pct ?? 0),
+              typeof parsed.message === 'string' ? parsed.message : undefined
+            )
+          } else if (parsed.type === 'error') {
+            scriptError = `Separation failed: ${String(parsed.message)}`
+          } else if (parsed.type === 'done' && Array.isArray(parsed.stems)) {
+            producedStems = (parsed.stems as unknown[]).map(String)
           }
         }
-      )
-      if (job.cancelled || !jobs.has(videoId)) return
-      if (scriptError) bail(scriptError)
+      }
+    )
+    if (job.cancelled || !jobs.has(videoId)) return
+    if (scriptError) bail(scriptError)
 
-      const finalStems = producedStems ?? []
-      if (!stemsPresent(videoId, finalStems)) bail('Separation finished but stem files are missing')
+    const finalStems = producedStems ?? []
+    if (!stemsPresent(videoId, finalStems)) bail('Separation finished but stem files are missing')
 
-      progress(job, 'finalize', 100, 'Adding to library')
-      const songs = upsertSong({
-        videoId,
-        title: meta!.title,
-        duration: meta!.duration,
-        addedAt: existing?.addedAt ?? Date.now(),
-        model: job.model,
-        stems: finalStems
-      })
-      send({ kind: 'done', data: { videoId, song: songs[0] } })
-    } finally {
-      release()
-    }
+    progress(job, 'finalize', 100, 'Adding to library')
+    const songs = upsertSong({
+      videoId,
+      title: meta!.title,
+      duration: meta!.duration,
+      addedAt: existing?.addedAt ?? Date.now(),
+      model: job.model,
+      stems: finalStems
+    })
+    send({ kind: 'done', data: { videoId, song: songs[0] } })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     if (message !== 'cancelled') {
@@ -285,7 +251,65 @@ export async function startJob(
     }
   } finally {
     jobs.delete(videoId)
+    currentRunningJob = null
+    processNextInQueue()
   }
+}
+
+function processNextInQueue(): void {
+  if (currentRunningJob !== null || queue.length === 0) return
+  const nextItem = queue.shift()
+  if (!nextItem) return
+
+  const nextJob = jobs.get(nextItem.videoId)
+  if (!nextJob || nextJob.cancelled) {
+    processNextInQueue()
+    return
+  }
+
+  updateQueuePositions()
+  void executeJob(nextJob, nextItem.url, nextItem.stems)
+}
+
+export async function startJob(
+  rawUrl: string,
+  model = 'bs_roformer',
+  stems?: string[],
+  force = false
+): Promise<void> {
+  const url = rawUrl.trim()
+  const videoId = parseVideoId(url)
+  if (!videoId) {
+    send({ kind: 'failed', data: { videoId: '', message: 'Could not parse a YouTube URL or video id out of that' } })
+    return
+  }
+  if (jobs.has(videoId)) {
+    send({ kind: 'failed', data: { videoId, message: 'This song is already being processed or queued' } })
+    return
+  }
+
+  const existing = loadSongs().find((s) => s.videoId === videoId)
+  const covered =
+    !force &&
+    existing &&
+    existing.model === model &&
+    !!existing.stems?.length &&
+    (stems?.length ? stems.every((s) => existing.stems!.includes(s)) : true)
+  if (covered && stemsPresent(videoId, stemsFor(existing))) {
+    send({ kind: 'done', data: { videoId, song: existing } })
+    return
+  }
+
+  const job: ActiveJob = { videoId, model, cancelled: false, title: existing?.title }
+  jobs.set(videoId, job)
+
+  if (currentRunningJob !== null) {
+    queue.push({ url, videoId, model, stems, force })
+    progress(job, 'metadata', 0, `In queue (position #${queue.length})`)
+    return
+  }
+
+  void executeJob(job, url, stems)
 }
 
 function runProcess(
@@ -412,15 +436,41 @@ function killTree(proc: ChildProcess): void {
 }
 
 export function cancelJob(videoId?: string): void {
-  const targets = videoId
-    ? ([jobs.get(videoId)].filter(Boolean) as ActiveJob[])
-    : Array.from(jobs.values())
-  for (const job of targets) {
-    job.cancelled = true
-    killTree(job.proc as ChildProcess)
-    jobs.delete(job.videoId)
-    rmSync(songDir(job.videoId), { recursive: true, force: true })
-    send({ kind: 'failed', data: { videoId: job.videoId, message: 'Cancelled' } })
+  if (videoId) {
+    // Check if in queue
+    const qIndex = queue.findIndex((q) => q.videoId === videoId)
+    if (qIndex >= 0) {
+      queue.splice(qIndex, 1)
+      jobs.delete(videoId)
+      updateQueuePositions()
+      send({ kind: 'failed', data: { videoId, message: 'Cancelled' } })
+      return
+    }
+
+    // Check if current running job
+    const job = jobs.get(videoId)
+    if (job) {
+      job.cancelled = true
+      if (job.proc) killTree(job.proc)
+      jobs.delete(job.videoId)
+      rmSync(songDir(job.videoId), { recursive: true, force: true })
+      send({ kind: 'failed', data: { videoId: job.videoId, message: 'Cancelled' } })
+      if (currentRunningJob?.videoId === videoId) {
+        currentRunningJob = null
+        processNextInQueue()
+      }
+    }
+  } else {
+    // Cancel all
+    queue.length = 0
+    for (const job of jobs.values()) {
+      job.cancelled = true
+      if (job.proc) killTree(job.proc)
+      rmSync(songDir(job.videoId), { recursive: true, force: true })
+      send({ kind: 'failed', data: { videoId: job.videoId, message: 'Cancelled' } })
+    }
+    jobs.clear()
+    currentRunningJob = null
   }
 }
 

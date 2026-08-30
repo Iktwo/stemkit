@@ -1,6 +1,6 @@
 export type StemId = 'vocals' | 'drums' | 'bass' | 'other' | 'piano' | 'guitar'
 
-export const DEFAULT_STEMS: string[] = ['vocals', 'drums', 'bass', 'other']
+export const DEFAULT_STEMS: string[] = ['vocals', 'drums', 'bass', 'guitar', 'piano', 'other']
 
 export const MODEL_STANDARD = 'htdemucs_ft'
 export const MODEL_EXTENDED = 'bs_roformer'
