@@ -9,7 +9,7 @@ export interface StemMeta {
 }
 
 const ALL_META: Record<StemId, StemMeta> = {
-  vocals: { id: 'vocals', label: 'vocals', color: '#A78BFA', icon: <MicIcon /> },
+  vocals: { id: 'vocals', label: 'vocals', color: '#A5BD6A', icon: <MicIcon /> },
   drums: { id: 'drums', label: 'drums', color: '#F87171', icon: <DrumIcon /> },
   bass: { id: 'bass', label: 'bass', color: '#60A5FA', icon: <BassIcon /> },
   guitar: { id: 'guitar', label: 'guitar', color: '#F472B6', icon: <GuitarIcon /> },

@@ -76,7 +76,7 @@ function SeekBar({
       >
         <div className="w-full h-1 rounded-full bg-white/10 overflow-hidden">
           <div
-            className="h-full rounded-full bg-gradient-to-r from-violet-400 to-emerald-400"
+            className="h-full rounded-full bg-gradient-to-r from-olive-400 to-emerald-400"
             style={{ width: `${frac * 100}%` }}
           />
         </div>
@@ -112,7 +112,7 @@ export function Transport({
         <button
           onClick={onTogglePlay}
           disabled={duration === 0}
-          className="no-drag w-11 h-11 rounded-full bg-white text-black flex items-center justify-center hover:scale-105 active:scale-95 transition-transform shadow-lg shadow-violet-500/20 disabled:opacity-40 disabled:hover:scale-100"
+          className="no-drag w-11 h-11 rounded-full bg-white text-black flex items-center justify-center hover:scale-105 active:scale-95 transition-transform shadow-lg shadow-olive-500/20 disabled:opacity-40 disabled:hover:scale-100"
         >
           {playing ? (
             <PauseIcon className="w-5 h-5 translate-x-px" />

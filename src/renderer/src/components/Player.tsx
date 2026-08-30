@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { MODEL_EXTENDED, MODEL_STANDARD, type Song, type StemId } from '../../../shared/types'
+import { MODEL_EXTENDED, type Song, type StemId } from '../../../shared/types'
 import { engine, decodePayload, type BufferMap } from '../lib/engine'
 import { buildStemMeta, STEM_INFO, PREFERRED_ORDER } from '../lib/stems'
 import { fmtTime } from '../lib/format'
@@ -65,7 +65,6 @@ export function Player({ song, onReprocess }: Props): React.ReactElement {
 
   // Reprocess modal state
   const [showReprocess, setShowReprocess] = useState(false)
-  const [reprocessModel, setReprocessModel] = useState<string>(song.model || MODEL_EXTENDED)
   const [reprocessStems, setReprocessStems] = useState<Set<StemId>>(
     new Set<StemId>((song.stems as StemId[]) || (PREFERRED_ORDER as StemId[]))
   )
@@ -93,7 +92,6 @@ export function Player({ song, onReprocess }: Props): React.ReactElement {
     setSolos(new Set())
     setPreset('all')
     setShowReprocess(false)
-    setReprocessModel(song.model || MODEL_EXTENDED)
     setReprocessStems(new Set<StemId>((song.stems as StemId[]) || (PREFERRED_ORDER as StemId[])))
     engine.stopAll()
 
@@ -297,11 +295,11 @@ export function Player({ song, onReprocess }: Props): React.ReactElement {
     const ordered = PREFERRED_ORDER.filter((id) => reprocessStems.has(id))
     clearBufferCache(song.videoId)
     setShowReprocess(false)
-    onReprocess?.(song.videoId, reprocessModel, ordered)
+    onReprocess?.(song.videoId, MODEL_EXTENDED, ordered)
   }
 
   return (
-    <div className="h-full flex flex-col overflow-hidden bg-gradient-to-b from-[#101018] to-[#0a0a0e]">
+    <div className="h-full flex flex-col overflow-hidden bg-gradient-to-b from-[#11130d] to-[#0a0c08]">
       <div className="flex-1 overflow-y-auto px-8 py-6">
         <div className="max-w-5xl mx-auto space-y-4">
           <div className="flex gap-4">
@@ -334,14 +332,7 @@ export function Player({ song, onReprocess }: Props): React.ReactElement {
                 <div className="min-w-0 flex-1">
                   <h3 className="text-xl font-semibold leading-snug truncate">{song.title}</h3>
                   <p className="text-xs text-white/45 mt-1.5 font-mono truncate">
-                    {fmtTime(song.duration)} · added {addedLabel} ·{' '}
-                    {song.model === 'bs_roformer'
-                      ? 'BS-RoFormer (SOTA 6-source)'
-                      : song.model === 'htdemucs_6s'
-                        ? 'Demucs (6-source)'
-                        : song.model === 'htdemucs_ft'
-                          ? 'Demucs FT (4-source)'
-                          : '4-source engine'}
+                    {fmtTime(song.duration)} · added {addedLabel} · BS-RoFormer (SOTA)
                   </p>
                 </div>
                 <span className="shrink-0 text-xs px-3 py-1.5 rounded-full bg-white/5 text-white/50 font-medium">
@@ -361,7 +352,7 @@ export function Player({ song, onReprocess }: Props): React.ReactElement {
               <div className="flex items-center gap-2.5 flex-wrap">
                 <button
                   onClick={() => setShowReprocess(true)}
-                  className="no-drag glass rounded-xl px-4 py-2.5 text-[13px] font-medium text-violet-200 hover:text-white hover:bg-violet-500/20 border border-violet-400/30 transition-all flex items-center gap-2"
+                  className="no-drag glass rounded-xl px-4 py-2.5 text-[13px] font-medium text-olive-200 hover:text-white hover:bg-olive-500/20 border border-olive-400/30 transition-all flex items-center gap-2"
                   title="Reprocess this track with SOTA BS-RoFormer or new stems"
                 >
                   <RefreshIcon className="w-3.5 h-3.5" />
@@ -428,7 +419,7 @@ export function Player({ song, onReprocess }: Props): React.ReactElement {
             <div className="flex items-start justify-between">
               <div>
                 <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                  <RefreshIcon className="w-5 h-5 text-violet-400" />
+                  <RefreshIcon className="w-5 h-5 text-olive-400" />
                   Reprocess Track
                 </h2>
                 <p className="text-xs text-white/45 mt-0.5 max-w-sm truncate">{song.title}</p>
@@ -439,52 +430,6 @@ export function Player({ song, onReprocess }: Props): React.ReactElement {
               >
                 <XIcon className="w-4 h-4" />
               </button>
-            </div>
-
-            {/* Model Selection */}
-            <div>
-              <label className="block text-[11px] font-semibold uppercase tracking-widest text-white/40 mb-2">
-                Separation Engine
-              </label>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  onClick={() => setReprocessModel(MODEL_EXTENDED)}
-                  className={`no-drag text-left p-3 rounded-xl border transition-all ${
-                    reprocessModel === MODEL_EXTENDED
-                      ? 'border-violet-400/80 bg-violet-500/15 text-white ring-1 ring-violet-400/40'
-                      : 'border-white/10 bg-white/5 text-white/60 hover:bg-white/10 hover:text-white'
-                  }`}
-                >
-                  <div className="font-semibold text-[13px] flex items-center gap-1.5">
-                    BS-RoFormer
-                    <span className="text-[9px] uppercase font-mono px-1.5 py-0.5 rounded bg-violet-400/20 text-violet-300">
-                      SOTA
-                    </span>
-                  </div>
-                  <div className="text-[11px] text-white/40 mt-1 leading-tight">
-                    6-source Band-Split Transformer. Best for piano & guitar isolation.
-                  </div>
-                </button>
-
-                <button
-                  onClick={() => setReprocessModel(MODEL_STANDARD)}
-                  className={`no-drag text-left p-3 rounded-xl border transition-all ${
-                    reprocessModel === MODEL_STANDARD
-                      ? 'border-emerald-400/80 bg-emerald-500/15 text-white ring-1 ring-emerald-400/40'
-                      : 'border-white/10 bg-white/5 text-white/60 hover:bg-white/10 hover:text-white'
-                  }`}
-                >
-                  <div className="font-semibold text-[13px] flex items-center gap-1.5">
-                    Demucs FT
-                    <span className="text-[9px] uppercase font-mono px-1.5 py-0.5 rounded bg-emerald-400/20 text-emerald-300">
-                      Fast
-                    </span>
-                  </div>
-                  <div className="text-[11px] text-white/40 mt-1 leading-tight">
-                    Fine-tuned 4-source Demucs model (vocals, drums, bass, other).
-                  </div>
-                </button>
-              </div>
             </div>
 
             {/* Stem Selection */}
@@ -553,7 +498,7 @@ export function Player({ song, onReprocess }: Props): React.ReactElement {
 
             <div className="pt-2 border-t border-white/10 flex items-center justify-between">
               <p className="text-[11px] text-white/40">
-                Reuses existing audio download — skips straight to separation.
+                Reuses existing audio download — separates with SOTA BS-RoFormer.
               </p>
               <div className="flex items-center gap-2">
                 <button
@@ -565,7 +510,7 @@ export function Player({ song, onReprocess }: Props): React.ReactElement {
                 <button
                   onClick={handleStartReprocess}
                   disabled={reprocessStems.size === 0}
-                  className="no-drag px-4 py-2 rounded-xl text-xs font-semibold bg-violet-500 hover:bg-violet-400 text-white transition-all disabled:opacity-40 flex items-center gap-1.5"
+                  className="no-drag px-4 py-2 rounded-xl text-xs font-semibold bg-olive-500 hover:bg-olive-400 text-white transition-all disabled:opacity-40 flex items-center gap-1.5"
                 >
                   <RefreshIcon className="w-3.5 h-3.5" />
                   Reprocess Track

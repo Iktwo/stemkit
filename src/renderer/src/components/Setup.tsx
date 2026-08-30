@@ -53,8 +53,8 @@ export function Setup({ status, logs, onInstall }: Props): React.ReactElement {
               </div>
             ))}
             {status.bootstrapping && (
-              <div className="flex items-center gap-2 mt-2 text-violet-300">
-                <span className="w-3 h-3 rounded-full border-2 border-white/20 border-t-violet-300 animate-spin inline-block" />
+              <div className="flex items-center gap-2 mt-2 text-olive-300">
+                <span className="w-3 h-3 rounded-full border-2 border-white/20 border-t-olive-300 animate-spin inline-block" />
                 working…
               </div>
             )}

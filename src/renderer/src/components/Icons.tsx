@@ -149,12 +149,12 @@ export function LogoMark({ className = 'w-7 h-7' }: IconProps) {
     <svg viewBox="0 0 32 32" fill="none" className={className}>
       <defs>
         <linearGradient id="lg" x1="0" y1="0" x2="32" y2="32">
-          <stop offset="0%" stopColor="#A78BFA" />
-          <stop offset="100%" stopColor="#34D399" />
+          <stop offset="0%" stopColor="#a5bd6a" />
+          <stop offset="100%" stopColor="#52642a" />
         </linearGradient>
       </defs>
       <rect width="32" height="32" rx="9" fill="url(#lg)" opacity="0.92" />
-      <g stroke="#0b0b10" strokeWidth="2.2" strokeLinecap="round">
+      <g stroke="#0c0d0a" strokeWidth="2.2" strokeLinecap="round">
         <path d="M9 12v8" />
         <path d="M13 8.5v15" />
         <path d="M17 11v10" />

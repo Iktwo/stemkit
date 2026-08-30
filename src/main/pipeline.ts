@@ -179,11 +179,7 @@ async function executeJob(job: ActiveJob, url: string, stems?: string[]): Promis
       job,
       'separate',
       0,
-      job.model.includes('roformer')
-        ? 'Preparing BS-RoFormer SOTA engine…'
-        : job.model === 'htdemucs_6s'
-          ? 'Preparing Demucs 6-source engine…'
-          : 'Preparing Demucs engine…'
+      'Preparing BS-RoFormer SOTA engine…'
     )
 
     if (job.cancelled || !jobs.has(videoId)) return

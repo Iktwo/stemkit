@@ -45,7 +45,7 @@ export function Sidebar({
           onClick={onAdd}
           className={`no-drag w-full flex items-center justify-center gap-2 rounded-xl py-2.5 px-4 text-xs font-semibold transition-all shadow-sm ${
             activeId === null
-              ? 'bg-violet-500 text-white shadow-violet-500/25 ring-1 ring-violet-400'
+              ? 'bg-olive-500 text-white shadow-olive-500/25 ring-1 ring-olive-400'
               : 'bg-white/10 text-white/90 hover:bg-white/15 hover:text-white'
           }`}
         >
@@ -71,7 +71,7 @@ export function Sidebar({
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Filter library…"
-            className="no-drag w-full bg-white/[0.04] border border-white/10 rounded-lg px-2.5 py-1 text-[12px] text-white outline-none placeholder:text-white/25 focus:border-violet-400/50 mb-1"
+            className="no-drag w-full bg-white/[0.04] border border-white/10 rounded-lg px-2.5 py-1 text-[12px] text-white outline-none placeholder:text-white/25 focus:border-olive-400/50 mb-1"
           />
         )}
       </div>
@@ -93,7 +93,6 @@ export function Sidebar({
           const pendingInfo = pending[song.videoId]
           const working = !!pendingInfo && !pendingInfo.error
           const failed = !!pendingInfo?.error
-          const isSOTA = song.model?.includes('roformer')
 
           return (
             <div
@@ -116,7 +115,7 @@ export function Sidebar({
                 />
                 {working && (
                   <span className="absolute inset-0 flex items-center justify-center">
-                    <span className="w-3.5 h-3.5 rounded-full border-2 border-violet-300/40 border-t-violet-300 animate-spin" />
+                    <span className="w-3.5 h-3.5 rounded-full border-2 border-olive-300/40 border-t-olive-300 animate-spin" />
                   </span>
                 )}
               </div>
@@ -129,7 +128,7 @@ export function Sidebar({
                   {pendingInfo ? (
                     <span
                       className={`text-[11px] font-medium truncate ${
-                        failed ? 'text-rose-300' : 'text-violet-300 animate-pulse'
+                        failed ? 'text-rose-300' : 'text-olive-300 animate-pulse'
                       }`}
                     >
                       {failed ? 'Failed' : pendingInfo.label}
@@ -140,14 +139,8 @@ export function Sidebar({
                         {fmtTime(song.duration)}
                       </span>
                       <span className="text-white/20 text-[10px]">·</span>
-                      <span
-                        className={`text-[9px] px-1.5 py-0.2 rounded font-semibold uppercase ${
-                          isSOTA
-                            ? 'bg-violet-500/20 text-violet-300'
-                            : 'bg-white/10 text-white/45'
-                        }`}
-                      >
-                        {isSOTA ? 'SOTA' : '4-Stem'}
+                      <span className="text-[9px] px-1.5 py-0.2 rounded font-semibold uppercase bg-olive-500/20 text-olive-300">
+                        {song.stems?.length ? `${song.stems.length} stems` : 'SOTA'}
                       </span>
                     </>
                   )}

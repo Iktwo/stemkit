@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  MODEL_STANDARD,
   MODEL_EXTENDED,
   DEFAULT_STEMS,
   type SearchResult,
@@ -24,7 +23,6 @@ const ALL_STEMS = PREFERRED_ORDER
 export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props): React.ReactElement {
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<Set<StemId>>(new Set<StemId>(DEFAULT_STEMS as StemId[]))
-  const [preferredModel, setPreferredModel] = useState<string>(MODEL_EXTENDED)
   const [results, setResults] = useState<SearchResult[]>([])
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
@@ -32,8 +30,6 @@ export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props
   const seqRef = useRef(0)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const usesExtended = [...selected].some((id) => id === 'guitar' || id === 'piano')
-  const effectiveModel = usesExtended ? MODEL_EXTENDED : preferredModel
   const orderedSelection = ALL_STEMS.filter((id) => selected.has(id))
 
   const toggleStem = (id: StemId): void => {
@@ -52,7 +48,7 @@ export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props
   const startWithSelection = (videoIdOrUrl: string): void => {
     onStart(
       videoIdOrUrl.startsWith('http') ? videoIdOrUrl : `https://www.youtube.com/watch?v=${videoIdOrUrl}`,
-      effectiveModel,
+      MODEL_EXTENDED,
       orderedSelection
     )
   }
@@ -114,11 +110,11 @@ export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props
   }
 
   return (
-    <div className="h-full flex flex-col items-center px-8 pt-[6vh] pb-8 overflow-y-auto bg-gradient-to-b from-[#12121c] to-[#0a0a0e]">
+    <div className="h-full flex flex-col items-center px-8 pt-[6vh] pb-8 overflow-y-auto bg-gradient-to-b from-[#12140f] to-[#0a0c08]">
       <div className="w-full max-w-2xl space-y-6">
         {/* Header Hero */}
         <div className="text-center space-y-2">
-          <h1 className="text-[32px] font-extrabold tracking-tight leading-tight bg-gradient-to-r from-violet-300 via-white to-emerald-200 bg-clip-text text-transparent">
+          <h1 className="text-[32px] font-extrabold tracking-tight leading-tight bg-gradient-to-r from-olive-300 via-white to-emerald-200 bg-clip-text text-transparent">
             Separate any song into isolated stems
           </h1>
           <p className="text-white/45 text-[14px]">
@@ -135,18 +131,18 @@ export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props
             onKeyDown={(e) => e.key === 'Enter' && submit()}
             placeholder="Paste YouTube link or search artist / track title…"
             spellCheck={false}
-            className="no-drag flex-1 glass rounded-xl px-4 py-3 text-sm outline-none placeholder:text-white/30 focus:ring-2 focus:ring-violet-400/60 transition-all text-white"
+            className="no-drag flex-1 glass rounded-xl px-4 py-3 text-sm outline-none placeholder:text-white/30 focus:ring-2 focus:ring-olive-400/60 transition-all text-white"
           />
           <button
             onClick={submit}
             disabled={!query.trim() || selected.size === 0}
-            className="no-drag px-6 rounded-xl bg-violet-500 hover:bg-violet-400 active:scale-[0.98] text-white text-sm font-semibold transition-all disabled:opacity-40 disabled:hover:bg-violet-500 disabled:active:scale-100 shadow-md shadow-violet-500/25 cursor-pointer"
+            className="no-drag px-6 rounded-xl bg-olive-500 hover:bg-olive-400 active:scale-[0.98] text-white text-sm font-semibold transition-all disabled:opacity-40 disabled:hover:bg-olive-500 disabled:active:scale-100 shadow-md shadow-olive-500/25 cursor-pointer"
           >
             {parseVideoId(query) ? 'Split Stems' : 'Search'}
           </button>
         </div>
 
-        {/* Stem & Engine Settings Card */}
+        {/* Stem Selection Card */}
         <div className="glass rounded-2xl p-4.5 border border-white/10 space-y-3.5">
           {/* Header with Quick Presets */}
           <div className="flex items-center justify-between flex-wrap gap-2">
@@ -154,12 +150,10 @@ export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props
               <span className="text-[11px] font-bold uppercase tracking-wider text-white/40">
                 Instruments
               </span>
-              <span className="text-[11px] font-semibold text-violet-300 bg-violet-500/15 px-2 py-0.5 rounded-full border border-violet-500/25">
+              <span className="text-[11px] font-semibold text-olive-300 bg-olive-500/15 px-2 py-0.5 rounded-full border border-olive-500/25">
                 {selected.size === 0
                   ? 'select at least 1'
-                  : usesExtended
-                    ? `BS-RoFormer SOTA · ${selected.size} stems`
-                    : `${effectiveModel === MODEL_EXTENDED ? 'BS-RoFormer SOTA' : 'Demucs FT'} · ${selected.size} stems`}
+                  : `${selected.size} ${selected.size === 1 ? 'stem' : 'stems'} selected`}
               </span>
             </div>
 
@@ -169,28 +163,28 @@ export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props
               <button
                 type="button"
                 onClick={() => setPreset(ALL_STEMS as StemId[])}
-                className="px-2 py-0.5 rounded-md bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition-colors"
+                className="px-2 py-0.5 rounded-md bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition-colors cursor-pointer"
               >
                 All 6
               </button>
               <button
                 type="button"
                 onClick={() => setPreset(['piano', 'guitar'])}
-                className="px-2 py-0.5 rounded-md bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition-colors"
+                className="px-2 py-0.5 rounded-md bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition-colors cursor-pointer"
               >
                 Piano & Guitar
               </button>
               <button
                 type="button"
                 onClick={() => setPreset(['vocals', 'drums', 'bass', 'other'])}
-                className="px-2 py-0.5 rounded-md bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition-colors"
+                className="px-2 py-0.5 rounded-md bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition-colors cursor-pointer"
               >
                 Standard 4
               </button>
               <button
                 type="button"
                 onClick={() => setPreset(['piano'])}
-                className="px-2 py-0.5 rounded-md bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition-colors"
+                className="px-2 py-0.5 rounded-md bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition-colors cursor-pointer"
               >
                 Solo Piano
               </button>
@@ -230,38 +224,6 @@ export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props
                 </button>
               )
             })}
-          </div>
-
-          {/* Engine Selector */}
-          <div className="pt-2 border-t border-white/[0.08] flex items-center justify-between flex-wrap gap-2">
-            <span className="text-[11px] text-white/40">Separation Engine:</span>
-            <div className="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-white/10">
-              <button
-                type="button"
-                onClick={() => setPreferredModel(MODEL_EXTENDED)}
-                className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all ${
-                  effectiveModel === MODEL_EXTENDED
-                    ? 'bg-violet-500 text-white shadow-sm'
-                    : 'text-white/40 hover:text-white'
-                }`}
-              >
-                BS-RoFormer (SOTA 6-source)
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setPreferredModel(MODEL_STANDARD)
-                  setSelected(new Set(['vocals', 'drums', 'bass', 'other'] as StemId[]))
-                }}
-                className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all ${
-                  effectiveModel === MODEL_STANDARD
-                    ? 'bg-emerald-500 text-white shadow-sm'
-                    : 'text-white/40 hover:text-white'
-                }`}
-              >
-                Demucs FT (4-source)
-              </button>
-            </div>
           </div>
         </div>
 
@@ -320,9 +282,9 @@ export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props
                         <span className="block text-[11px] text-white/40 mt-0.5">{r.channel}</span>
                       </div>
                       {inProgress ? (
-                        <div className="shrink-0 flex items-center gap-2 pr-2 text-violet-300">
+                        <div className="shrink-0 flex items-center gap-2 pr-2 text-olive-300">
                           <span className="text-[11px] font-medium max-w-[130px] truncate">{p!.label}</span>
-                          <span className="w-3.5 h-3.5 rounded-full border-2 border-white/20 border-t-violet-300 animate-spin" />
+                          <span className="w-3.5 h-3.5 rounded-full border-2 border-white/20 border-t-olive-300 animate-spin" />
                         </div>
                       ) : failed ? (
                         <span className="shrink-0 pr-2 text-[11px] font-semibold text-rose-300">
@@ -339,7 +301,7 @@ export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props
                             e.stopPropagation()
                             startResult(r)
                           }}
-                          className="shrink-0 text-xs font-semibold px-3 py-1.5 rounded-lg bg-violet-500/20 text-violet-300 group-hover:bg-violet-500 group-hover:text-white transition-all shadow-sm cursor-pointer"
+                          className="shrink-0 text-xs font-semibold px-3 py-1.5 rounded-lg bg-olive-500/20 text-olive-300 group-hover:bg-olive-500 group-hover:text-white transition-all shadow-sm cursor-pointer"
                         >
                           Split Stems →
                         </button>

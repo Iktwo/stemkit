@@ -30,7 +30,7 @@ export function Processing({
   const stageIndex = job ? STAGES.findIndex((s) => s.id === job.stage) : -1
 
   return (
-    <div className="h-full flex items-center justify-center px-8 bg-gradient-to-b from-[#12121c] to-[#0a0a0e]">
+    <div className="h-full flex items-center justify-center px-8 bg-gradient-to-b from-[#12140f] to-[#0a0c08]">
       <div className="w-full max-w-md glass rounded-3xl p-8 shadow-2xl border border-white/10 rise-in">
         {/* Track Card */}
         <div className="flex items-center gap-4">
@@ -41,8 +41,8 @@ export function Processing({
               className="w-20 h-12 rounded-xl object-cover bg-white/5 shadow-md shrink-0"
             />
           ) : (
-            <div className="w-12 h-12 rounded-xl bg-violet-500/20 flex items-center justify-center shrink-0">
-              <span className="w-5 h-5 rounded-full border-2 border-violet-400/40 border-t-violet-400 animate-spin" />
+            <div className="w-12 h-12 rounded-xl bg-olive-500/20 flex items-center justify-center shrink-0">
+              <span className="w-5 h-5 rounded-full border-2 border-olive-400/40 border-t-olive-400 animate-spin" />
             </div>
           )}
           <div className="min-w-0 flex-1">
@@ -76,7 +76,7 @@ export function Processing({
                     done
                       ? 'bg-emerald-400 text-black shadow-sm'
                       : active
-                        ? 'bg-violet-400 text-black animate-pulse shadow-md shadow-violet-400/30 ring-2 ring-violet-400/30'
+                        ? 'bg-olive-400 text-black animate-pulse shadow-md shadow-olive-400/30 ring-2 ring-olive-400/30'
                         : error && i >= stageIndex
                           ? 'bg-rose-400/80 text-black'
                           : 'bg-white/10 text-white/30'
@@ -89,7 +89,7 @@ export function Processing({
                 </span>
                 <div className="flex-1 h-1.5 rounded-full bg-white/10 overflow-hidden">
                   <div
-                    className="h-full rounded-full bg-gradient-to-r from-violet-400 to-emerald-400 transition-[width] duration-300"
+                    className="h-full rounded-full bg-gradient-to-r from-olive-400 to-emerald-400 transition-[width] duration-300"
                     style={{ width: `${pct}%` }}
                   />
                 </div>
