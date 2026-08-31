@@ -405,7 +405,7 @@ export async function bootstrap(): Promise<boolean> {
 
     sendEnvEvent('Preparing workspace')
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(state.python.path as string, ['-m', 'venv', venv])
+      const child = spawn(state.python.path as string, ['-m', 'venv', '--clear', venv])
       child.on('close', (code) =>
         code === 0 ? resolve() : reject(new Error(`venv creation failed (${code})`))
       )
