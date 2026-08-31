@@ -258,7 +258,7 @@ export async function detectTools(): Promise<void> {
       const [version, machine] = out.trim().split(/\s+/)
       const minor = parseInt(version.split('.')[1], 10)
       const major = parseInt(version.split('.')[0], 10)
-      if (major > 3 || (major === 3 && minor >= 9 && minor <= 12)) { 
+      if (major > 3 || (major === 3 && minor >= 10 && minor <= 12)) {
         probes.push({ path: candidate, version, machine: machine ?? 'unknown' })
       }
     } catch {
@@ -268,7 +268,8 @@ export async function detectTools(): Promise<void> {
   probes.sort((a, b) => {
     const aArm = a.machine === 'arm64' ? 0 : 1
     const bArm = b.machine === 'arm64' ? 0 : 1
-    return aArm - bArm
+    if (aArm !== bArm) return aArm - bArm
+    return parseInt(b.version.split('.')[1], 10) - parseInt(a.version.split('.')[1], 10)
   })
   const best = probes[0]
   if (best) {
@@ -465,9 +466,20 @@ export async function bootstrap(): Promise<boolean> {
     })
 
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(pip, ['-m', 'pip', 'install', '-q', 'yt-dlp-ejs'])
+      const child = spawn(pip, ['-m', 'pip', 'install', 'yt-dlp-ejs'])
+      let lastErr = ''
+      child.stdout?.on('data', (chunk: Buffer) => {
+        for (const line of chunk.toString().split('\n')) {
+          const t = line.trim()
+          if (/^(Collecting|Downloading|Installing)/i.test(t)) sendEnvEvent(t.slice(0, 200))
+        }
+      })
+      child.stderr?.on('data', (chunk: Buffer) => {
+        lastErr = chunk.toString().trim()
+        if (lastErr) sendEnvEvent(lastErr.slice(0, 200), 'error')
+      })
       child.on('close', (code) =>
-        code === 0 ? resolve() : reject(new Error(`solver install failed (${code})`))
+        code === 0 ? resolve() : reject(new Error(`solver install failed (${code})${lastErr ? `: ${lastErr.slice(0, 200)}` : ''}`))
       )
       child.on('error', reject)
     })
