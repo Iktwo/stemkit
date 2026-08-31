@@ -3,6 +3,7 @@ export type StemId = 'vocals' | 'drums' | 'bass' | 'other' | 'piano' | 'guitar'
 export const DEFAULT_STEMS: string[] = ['vocals', 'drums', 'bass', 'other']
 
 export const MODEL_STANDARD = 'htdemucs'
+export const MODEL_FINE = 'htdemucs_ft'
 export const MODEL_EXTENDED = 'htdemucs_6s'
 
 export interface Song {

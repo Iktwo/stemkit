@@ -21,6 +21,7 @@ import {
   loadSongs
 } from './library'
 import type { JobEvent, JobStage } from '../shared/types'
+import { MODEL_FINE, MODEL_EXTENDED } from '../shared/types'
 import { parseVideoId } from '../shared/url'
 
 interface ActiveJob {
@@ -80,9 +81,14 @@ export function extractVideoId(url: string): string | null {
 
 export async function startJob(
   rawUrl: string,
-  model = 'htdemucs',
+  requestedModel = 'htdemucs',
   stems?: string[]
 ): Promise<void> {
+  // the fine-tuned model has no piano/guitar sources, fall back to the 6s engine
+  const model =
+    requestedModel === MODEL_FINE && stems?.some((s) => s === 'guitar' || s === 'piano')
+      ? MODEL_EXTENDED
+      : requestedModel
   const url = rawUrl.trim()
   const videoId = parseVideoId(url)
   if (!videoId) {

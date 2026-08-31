@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Song, StemId } from '../../../shared/types'
+import { MODEL_FINE, MODEL_EXTENDED } from '../../../shared/types'
 import { engine, decodePayload, type BufferMap } from '../lib/engine'
 import { buildStemMeta } from '../lib/stems'
 import { fmtTime } from '../lib/format'
@@ -325,7 +326,11 @@ export function Player({ song }: Props): React.ReactElement {
                   <h3 className="text-xl font-semibold leading-snug truncate">{song.title}</h3>
                   <p className="text-xs text-white/45 mt-1.5 font-mono truncate">
                     {fmtTime(song.duration)} · added {addedLabel} ·{' '}
-                    {song.model === 'htdemucs_6s' ? '6-source engine' : '4-source engine'}
+                    {song.model === MODEL_EXTENDED
+                      ? '6-source engine'
+                      : song.model === MODEL_FINE
+                        ? 'high-quality engine'
+                        : '4-source engine'}
                   </p>
                 </div>
                 <span className="shrink-0 text-xs px-3 py-1.5 rounded-full bg-white/5 text-white/50 font-medium">

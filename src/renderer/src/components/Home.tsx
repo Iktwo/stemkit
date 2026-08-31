@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   MODEL_STANDARD,
+  MODEL_FINE,
   MODEL_EXTENDED,
   DEFAULT_STEMS,
   type SearchResult,
@@ -24,6 +25,7 @@ const ALL_STEMS = PREFERRED_ORDER
 export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props): React.ReactElement {
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<Set<StemId>>(new Set<StemId>(DEFAULT_STEMS as StemId[]))
+  const [hq, setHq] = useState(false)
   const [results, setResults] = useState<SearchResult[]>([])
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
@@ -32,7 +34,8 @@ export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const usesExtended = [...selected].some((id) => id === 'guitar' || id === 'piano')
-  const derivedModel = usesExtended ? MODEL_EXTENDED : MODEL_STANDARD
+  const effectiveHq = hq && !usesExtended
+  const derivedModel = usesExtended ? MODEL_EXTENDED : effectiveHq ? MODEL_FINE : MODEL_STANDARD
   const orderedSelection = ALL_STEMS.filter((id) => selected.has(id))
 
   const toggleStem = (id: StemId): void => {
@@ -147,7 +150,9 @@ export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props
                 ? 'select at least one'
                 : usesExtended
                   ? `6-source engine · ${selected.size} stems`
-                  : `4-source engine · ${selected.size} stems`}
+                  : effectiveHq
+                    ? `high-quality engine · ${selected.size} stems`
+                    : `4-source engine · ${selected.size} stems`}
             </span>
           </div>
           <div className="flex items-center gap-1.5 flex-wrap">
@@ -181,6 +186,46 @@ export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props
                 </button>
               )
             })}
+          </div>
+
+          <div className="mt-3 pt-3 border-t border-white/[0.06] flex items-center justify-between">
+            <span className="text-[11px] font-semibold uppercase tracking-widest text-white/30">
+              Quality
+            </span>
+            <div className="flex items-center gap-2">
+              {effectiveHq && (
+                <span className="text-[11px] text-white/30 font-medium">
+                  ~4× slower, cleaner stems
+                </span>
+              )}
+              <button
+                onClick={() => setHq(false)}
+                className={`no-drag rounded-full px-3 py-1 text-[11px] font-medium border transition-all ${
+                  !effectiveHq
+                    ? 'bg-white/10 text-white/85 border-white/20'
+                    : 'border-white/[0.08] bg-white/[0.03] text-white/35 hover:text-white/60 hover:border-white/20'
+                }`}
+              >
+                Standard
+              </button>
+              <button
+                onClick={() => !usesExtended && setHq(true)}
+                title={
+                  usesExtended
+                    ? 'High quality covers the four main stems — deselect guitar/piano to enable'
+                    : 'Cleaner separation, roughly 4× the processing time'
+                }
+                className={`no-drag rounded-full px-3 py-1 text-[11px] font-medium border transition-all ${
+                  effectiveHq
+                    ? 'bg-violet-400/15 text-violet-200 border-violet-300/30'
+                    : usesExtended
+                      ? 'border-white/[0.06] bg-white/[0.02] text-white/25 cursor-not-allowed'
+                      : 'border-white/[0.08] bg-white/[0.03] text-white/35 hover:text-white/60 hover:border-white/20'
+                }`}
+              >
+                High
+              </button>
+            </div>
           </div>
         </div>
 
@@ -268,7 +313,7 @@ export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props
 
         {!hasSongs && results.length === 0 && !searching && (
           <p className="mt-8 text-center text-xs text-white/25 leading-relaxed">
-            A 4-minute song takes about a minute to split.
+            A 4-minute song takes about {effectiveHq ? 'four minutes' : 'a minute'} to split.
           </p>
         )}
       </div>
