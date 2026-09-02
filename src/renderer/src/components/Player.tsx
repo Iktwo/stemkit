@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Song, StemId } from '../../../shared/types'
-import { MODEL_FINE, MODEL_EXTENDED } from '../../../shared/types'
+import { MODEL_DEFAULT, MODEL_EXTENDED } from '../../../shared/types'
 import { engine, decodePayload, type BufferMap } from '../lib/engine'
 import { buildStemMeta } from '../lib/stems'
 import { fmtTime } from '../lib/format'
@@ -328,8 +328,8 @@ export function Player({ song }: Props): React.ReactElement {
                     {fmtTime(song.duration)} · added {addedLabel} ·{' '}
                     {song.model === MODEL_EXTENDED
                       ? '6-source engine'
-                      : song.model === MODEL_FINE
-                        ? 'high-quality engine'
+                      : song.model === MODEL_DEFAULT
+                        ? 'roformer engine'
                         : '4-source engine'}
                   </p>
                 </div>
