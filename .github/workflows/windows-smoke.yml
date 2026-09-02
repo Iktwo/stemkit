@@ -20,7 +20,9 @@ jobs:
 
       - run: npm ci
 
-      - run: npm run dist:win
+      - run: npx electron-vite build
+
+      - run: npx electron-builder --win --publish never
 
       - name: Install (NSIS silent)
         shell: pwsh
@@ -45,7 +47,7 @@ jobs:
       - name: Print smoke log
         if: always()
         shell: pwsh
-        run: Get-Content "$env:TEMP\stemkit-smoke.log"
+        run: if (Test-Path "$env:TEMP\stemkit-smoke.log") { Get-Content "$env:TEMP\stemkit-smoke.log" }
 
       - name: Upload smoke log
         if: always()
