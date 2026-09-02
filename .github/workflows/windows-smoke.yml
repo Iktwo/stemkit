@@ -30,8 +30,15 @@ jobs:
           $installer = Get-ChildItem release -Filter *.exe | Select-Object -First 1
           if (-not $installer) { throw "no installer exe found in release/" }
           Write-Host "installer: $($installer.FullName)"
-          Start-Process -FilePath $installer.FullName -ArgumentList "/S" -Wait
-          $exe = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter "StemKit.exe" | Select-Object -First 1
+          $p = Start-Process -FilePath $installer.FullName -ArgumentList "/S" -Wait -PassThru
+          Write-Host "installer exit: $($p.ExitCode)"
+          # the installer can hand off to a child process; poll for the exe
+          $deadline = (Get-Date).AddSeconds(60)
+          do {
+            Start-Sleep -Seconds 2
+            $exe = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter "StemKit.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          } until ($exe -or (Get-Date) -gt $deadline)
+          Get-ChildItem "$env:LOCALAPPDATA\Programs" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "programs dir: $($_.Name)" }
           if (-not $exe) { throw "StemKit.exe not found after install" }
           Write-Host "installed: $($exe.FullName)"
           Add-Content $env:GITHUB_ENV "STEMKIT_EXE=$($exe.FullName)"
