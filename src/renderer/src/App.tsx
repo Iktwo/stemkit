@@ -84,10 +84,10 @@ export default function App(): React.ReactElement {
 
   const startUrl = useCallback(
     async (url: string, model: string = MODEL_DEFAULT, stems?: string[]): Promise<void> => {
-    const vid = parseVideoId(url)
-    if (!vid) return
-    setActiveId(vid)
-    setLastUrl(url)
+      const vid = parseVideoId(url)
+      if (!vid) return
+      setActiveId(vid)
+      setLastUrl(url)
       setLastModel(model)
       setErrors((prev) => withoutKey(prev, vid))
       setJobs((prev) =>

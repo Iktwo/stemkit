@@ -21,7 +21,7 @@ Everything runs locally — no accounts, no cloud, no API keys.
 - Per-stem mute/solo/volume, waveforms with click-to-seek
 - Parallel background splitting with live progress
 - Export any stem (or all) as WAV
-- Fully offline after setup — separation runs on Apple MPS / CPU, ffmpeg included
+- Fully offline after setup — separation runs on Apple Silicon (MPS), NVIDIA GPUs (CUDA) or CPU; ffmpeg included
 
 ## Download
 
@@ -29,7 +29,7 @@ Grab installers from [Releases](https://github.com/danielravina/stemkit/releases
 - **macOS** (Apple Silicon): `StemKit-x.y.z-mac-arm64.dmg`
 - **Windows**: `StemKit-Setup-x.y.z.exe` (installer) or portable `.zip`
 
-First launch creates a private Python environment and downloads the separation engine (~2 GB, one time) plus model weights (~80 MB). ffmpeg is bundled — nothing else to install.
+First launch creates a private Python environment and downloads the separation engine (~2 GB, one time) plus model weights (~80 MB). The first split also downloads the neural vocals engine (~913 MB, one time). ffmpeg is bundled — nothing else to install.
 
 > **macOS first launch**: builds are signed with a Developer ID but not notarized, so macOS may say it "cannot verify the developer". One-time fix: **System Settings → Privacy & Security → Open Anyway** (or `xattr -cr /Applications/StemKit.app`).
 >
@@ -82,8 +82,11 @@ Without these secrets CI falls back to ad-hoc signing (app runs, but Gatekeeper 
 ## How it works
 
 ```
-YouTube URL ──► yt-dlp (+JS runtime) ──► bundled ffmpeg ──► demucs htdemucs ──► stems/*.wav
-                                        │
+YouTube URL ──► yt-dlp (+JS runtime) ──► bundled ffmpeg ──► mel-band roformer (vocals) ─┐
+                                        │                                               ├─► stems/*.wav
+                                        └─────────────► demucs htdemucs ────────────────┘
+                                             (drums/bass/other, shift-averaged)
+
 Electron renderer ◄──── IPC events ─────┘
 video iframe (muted) + Web Audio stem playback · master clock = the audio itself
 ```
@@ -99,7 +102,8 @@ video iframe (muted) + Web Audio stem playback · master clock = the audio itsel
 src/main         Electron main process (pipeline, env bootstrap, library)
 src/preload      IPC bridge
 src/renderer     React UI (player, sync engine, waveforms)
-python/          separate.py — demucs wrapper with JSON progress output
+python/          separate.py (demucs) and roformer.py (neural vocals) with JSON progress output
+python/vendor/   patched model code — see python/vendor/README.md
 scripts/         node runner, ffmpeg fetchers
 build/           icon sources
 ```

@@ -13,6 +13,7 @@ export interface Song {
   addedAt: number
   model?: string
   stems?: string[]
+  took?: number
 }
 
 export interface EnvStatus {

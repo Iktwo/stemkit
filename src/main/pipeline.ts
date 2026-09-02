@@ -109,6 +109,7 @@ export async function startJob(
 
   const job: ActiveJob = { videoId, model, cancelled: false }
   jobs.set(videoId, job)
+  const startedAt = Date.now()
 
   const bail = (message: string): never => {
     throw Object.assign(new Error(message), { videoId })
@@ -262,6 +263,9 @@ export async function startJob(
         const otherStems = (
           stems?.length ? stems : ['drums', 'bass', 'other', 'vocals']
         ).filter((s) => s !== 'vocals')
+        // the demucs phase takes roughly twice as long as the vocals pass,
+        // so the bar reflects that split
+        const roformerSpan = otherStems.length > 0 ? 35 : 100
         if (wantsVocals) {
           if (!(await ensureEngineDeps())) {
             bail('Could not prepare the engine components for vocal separation')
@@ -281,14 +285,16 @@ export async function startJob(
               '--device',
               'auto'
             ],
-            lineParsers((pct, msg) => (msg ? pct : Math.round(pct * 0.65)))
+            lineParsers((pct, msg) =>
+              msg ? pct : Math.round((pct / 100) * roformerSpan)
+            )
           )
         }
         if (otherStems.length > 0) {
           progress(
             job,
             'separate',
-            wantsVocals ? 65 : 0,
+            wantsVocals ? roformerSpan : 0,
             `Separating ${otherStems.join(', ')}`
           )
           await runProcess(
@@ -304,13 +310,13 @@ export async function startJob(
               'htdemucs',
               '--device',
               'auto',
-              '--shifts',
-              '2',
               '--only',
               otherStems.join(',')
             ],
             lineParsers((pct, msg) =>
-              wantsVocals && !msg ? 65 + Math.round(pct * 0.35) : pct
+              wantsVocals && !msg
+                ? roformerSpan + Math.round((pct / 100) * (100 - roformerSpan))
+                : pct
             )
           )
         }
@@ -347,7 +353,8 @@ export async function startJob(
         duration: meta!.duration,
         addedAt: existing?.addedAt ?? Date.now(),
         model: job.model,
-        stems: producedStems
+        stems: producedStems,
+        took: Math.round((Date.now() - startedAt) / 1000)
       })
       send({ kind: 'done', data: { videoId, song: songs[0] } })
     } finally {
