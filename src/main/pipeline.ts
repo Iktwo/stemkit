@@ -7,6 +7,10 @@ import {
   venvPython,
   venvYtDlp,
   separateScript,
+  roformerScript,
+  modelsDir,
+  ensureEngineDeps,
+  hasGpuAcceleration,
   getStatus,
   ytDlpRuntimeArgs
 } from './env'
@@ -21,6 +25,7 @@ import {
   loadSongs
 } from './library'
 import type { JobEvent, JobStage } from '../shared/types'
+import { MODEL_DEFAULT, MODEL_EXTENDED } from '../shared/types'
 import { parseVideoId } from '../shared/url'
 
 interface ActiveJob {
@@ -80,7 +85,7 @@ export function extractVideoId(url: string): string | null {
 
 export async function startJob(
   rawUrl: string,
-  model = 'htdemucs',
+  requestedModel = MODEL_DEFAULT,
   stems?: string[]
 ): Promise<void> {
   const url = rawUrl.trim()
@@ -94,8 +99,17 @@ export async function startJob(
     return
   }
 
+  // the roformer engine needs GPU acceleration to be practical; without it
+  // the job quietly stays on the demucs engine
+  const wantsVocals = !stems?.length || stems.includes('vocals')
+  let model = requestedModel
+  if (requestedModel === MODEL_DEFAULT && wantsVocals && !(await hasGpuAcceleration())) {
+    model = 'htdemucs'
+  }
+
   const job: ActiveJob = { videoId, model, cancelled: false }
   jobs.set(videoId, job)
+  const startedAt = Date.now()
 
   const bail = (message: string): never => {
     throw Object.assign(new Error(message), { videoId })
@@ -147,7 +161,7 @@ export async function startJob(
       [
         ...ytDlpRuntimeArgs(),
         '-f',
-        'bestaudio[ext=m4a]/bestaudio/best',
+        'bestaudio/best',
         '--no-playlist',
         '-o',
         rawDownloadPath(videoId),
@@ -182,6 +196,8 @@ export async function startJob(
       '-y',
       '-i',
       rawPath,
+      '-af',
+      'aresample=44100:resampler=soxr',
       '-ar',
       '44100',
       '-ac',
@@ -195,64 +211,140 @@ export async function startJob(
     progress(job, 'convert', 100)
 
     mkdirSync(stemsDir(videoId), { recursive: true })
-    progress(
-      job,
-      'separate',
-      0,
-      job.model === 'htdemucs_6s'
-        ? 'Waiting for a free engine slot…'
-        : 'Waiting for a free engine slot… (first runs also download models)'
-    )
+    progress(job, 'separate', 0, 'Waiting for a free engine slot…')
 
     const release = await acquireSeparation()
     try {
       if (job.cancelled || !jobs.has(videoId)) return
-      progress(job, 'separate', 0, 'Separating stems')
       let scriptError: string | null = null
-      let producedStems: string[] | null = null
-      await runProcess(
-        job,
-        venvPython(),
-        [
-          separateScript(),
-          '--input',
-          mixWavPath(videoId),
-          '--out',
-          stemsDir(videoId),
-          '--model',
-          job.model,
-          '--device',
-          'auto',
-          ...(stems?.length ? ['--only', stems.join(',')] : [])
-        ],
-        {
-          onLine: (line) => {
-            let parsed: Record<string, unknown>
-            try {
-              parsed = JSON.parse(line)
-            } catch {
-              return
-            }
-            if (parsed.type === 'progress') {
-              progress(
-                job,
-                'separate',
-                Number(parsed.pct ?? 0),
-                typeof parsed.message === 'string' ? parsed.message : undefined
-              )
-            } else if (parsed.type === 'error') {
-              scriptError = `Separation failed: ${String(parsed.message)}`
-            } else if (parsed.type === 'done' && Array.isArray(parsed.stems)) {
-              producedStems = (parsed.stems as unknown[]).map(String)
-            }
+      const producedStems: string[] = []
+
+      const lineParsers = (mapPct: (pct: number, msg?: string) => number) => ({
+        onLine: (line: string): void => {
+          let parsed: Record<string, unknown>
+          try {
+            parsed = JSON.parse(line)
+          } catch {
+            return
+          }
+          if (parsed.type === 'progress') {
+            const pct = Number(parsed.pct ?? 0)
+            const message =
+              typeof parsed.message === 'string' ? parsed.message : undefined
+            progress(job, 'separate', mapPct(pct, message), message)
+          } else if (parsed.type === 'error') {
+            scriptError = `Separation failed: ${String(parsed.message)}`
+          } else if (parsed.type === 'done' && Array.isArray(parsed.stems)) {
+            producedStems.push(...(parsed.stems as unknown[]).map(String))
           }
         }
-      )
+      })
+
+      if (model === MODEL_EXTENDED) {
+        progress(job, 'separate', 0, 'Separating stems')
+        await runProcess(
+          job,
+          venvPython(),
+          [
+            separateScript(),
+            '--input',
+            mixWavPath(videoId),
+            '--out',
+            stemsDir(videoId),
+            '--model',
+            MODEL_EXTENDED,
+            '--device',
+            'auto',
+            ...(stems?.length ? ['--only', stems.join(',')] : [])
+          ],
+          lineParsers((pct) => pct)
+        )
+      } else if (model === MODEL_DEFAULT) {
+        const otherStems = (
+          stems?.length ? stems : ['drums', 'bass', 'other', 'vocals']
+        ).filter((s) => s !== 'vocals')
+        // the demucs phase takes roughly twice as long as the vocals pass,
+        // so the bar reflects that split
+        const roformerSpan = otherStems.length > 0 ? 35 : 100
+        if (wantsVocals) {
+          if (!(await ensureEngineDeps())) {
+            bail('Could not prepare the engine components for vocal separation')
+          }
+          progress(job, 'separate', 0, 'Separating vocals (first run downloads a 913MB engine)')
+          await runProcess(
+            job,
+            venvPython(),
+            [
+              roformerScript(),
+              '--input',
+              mixWavPath(videoId),
+              '--out',
+              stemsDir(videoId),
+              '--ckpt-dir',
+              modelsDir(),
+              '--device',
+              'auto'
+            ],
+            lineParsers((pct, msg) =>
+              msg ? pct : Math.round((pct / 100) * roformerSpan)
+            )
+          )
+        }
+        if (otherStems.length > 0) {
+          progress(
+            job,
+            'separate',
+            wantsVocals ? roformerSpan : 0,
+            `Separating ${otherStems.join(', ')}`
+          )
+          await runProcess(
+            job,
+            venvPython(),
+            [
+              separateScript(),
+              '--input',
+              mixWavPath(videoId),
+              '--out',
+              stemsDir(videoId),
+              '--model',
+              'htdemucs',
+              '--device',
+              'auto',
+              '--only',
+              otherStems.join(',')
+            ],
+            lineParsers((pct, msg) =>
+              wantsVocals && !msg
+                ? roformerSpan + Math.round((pct / 100) * (100 - roformerSpan))
+                : pct
+            )
+          )
+        }
+      } else {
+        progress(job, 'separate', 0, 'Separating stems')
+        await runProcess(
+          job,
+          venvPython(),
+          [
+            separateScript(),
+            '--input',
+            mixWavPath(videoId),
+            '--out',
+            stemsDir(videoId),
+            '--model',
+            model,
+            '--device',
+            'auto',
+            ...(stems?.length ? ['--only', stems.join(',')] : [])
+          ],
+          lineParsers((pct) => pct)
+        )
+      }
+
       if (job.cancelled || !jobs.has(videoId)) return
       if (scriptError) bail(scriptError)
 
-      const finalStems = producedStems ?? []
-      if (!stemsPresent(videoId, finalStems)) bail('Separation finished but stem files are missing')
+      if (!stemsPresent(videoId, producedStems)) bail('Separation finished but stem files are missing')
 
       progress(job, 'finalize', 100, 'Adding to library')
       const songs = upsertSong({
@@ -261,7 +353,8 @@ export async function startJob(
         duration: meta!.duration,
         addedAt: existing?.addedAt ?? Date.now(),
         model: job.model,
-        stems: finalStems
+        stems: producedStems,
+        took: Math.round((Date.now() - startedAt) / 1000)
       })
       send({ kind: 'done', data: { videoId, song: songs[0] } })
     } finally {

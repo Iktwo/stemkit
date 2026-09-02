@@ -1,5 +1,6 @@
 import argparse
 import json
+import struct
 import sys
 import time
 import wave
@@ -37,17 +38,19 @@ def load_wav(path):
     return audio, sr
 
 
-def save_wav(path, data, sr):
-    interleaved = data.T
-    peak = max(1e-9, float(np.abs(interleaved).max()))
-    if peak > 1.0:
-        interleaved = interleaved / peak * 0.999
-    pcm = (interleaved * 32767.0).astype("<i2")
-    with wave.open(path, "wb") as w:
-        w.setnchannels(pcm.shape[1])
-        w.setsampwidth(2)
-        w.setframerate(sr)
-        w.writeframes(pcm.tobytes())
+def save_wav_f32(path, data, sr):
+    """write a 32-bit float wav (fmt tag 3); values above 1.0 are preserved"""
+    channels, _ = data.shape
+    payload = data.T.astype("<f4").tobytes()
+    block_align = channels * 4
+    header = b"RIFF" + struct.pack("<I", 36 + len(payload)) + b"WAVE"
+    header += b"fmt " + struct.pack(
+        "<IHHIIHH", 16, 3, channels, sr, sr * block_align, block_align, 32
+    )
+    header += b"data" + struct.pack("<I", len(payload))
+    with open(path, "wb") as f:
+        f.write(header)
+        f.write(payload)
 
 
 def main():
@@ -114,10 +117,10 @@ def main():
     audio, sr = load_wav(args.input)
     target_sr = model.samplerate
     if sr != target_sr:
+        import torchaudio
+
         t = torch.from_numpy(audio)
-        t = torch.nn.functional.interpolate(
-            t.unsqueeze(0), scale_factor=target_sr / sr, mode="linear", align_corners=False
-        ).squeeze(0)
+        t = torchaudio.functional.resample(t, sr, target_sr)
         audio = t.numpy()
         sr = target_sr
     if audio.shape[0] == 1:
@@ -178,7 +181,7 @@ def main():
         if wanted is not None and name not in wanted:
             continue
         path = os.path.join(args.out, f"{name}.wav")
-        save_wav(path, out_cpu[i], sr)
+        save_wav_f32(path, out_cpu[i], sr)
         written.append(name)
         emit(type="stem", name=name)
 

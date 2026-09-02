@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  MODEL_STANDARD,
+  MODEL_DEFAULT,
   MODEL_EXTENDED,
   DEFAULT_STEMS,
   type SearchResult,
@@ -32,7 +32,7 @@ export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const usesExtended = [...selected].some((id) => id === 'guitar' || id === 'piano')
-  const derivedModel = usesExtended ? MODEL_EXTENDED : MODEL_STANDARD
+  const derivedModel = usesExtended ? MODEL_EXTENDED : MODEL_DEFAULT
   const orderedSelection = ALL_STEMS.filter((id) => selected.has(id))
 
   const toggleStem = (id: StemId): void => {
@@ -147,7 +147,7 @@ export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props
                 ? 'select at least one'
                 : usesExtended
                   ? `6-source engine · ${selected.size} stems`
-                  : `4-source engine · ${selected.size} stems`}
+                  : `roformer engine · ${selected.size} stems`}
             </span>
           </div>
           <div className="flex items-center gap-1.5 flex-wrap">
@@ -268,7 +268,7 @@ export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props
 
         {!hasSongs && results.length === 0 && !searching && (
           <p className="mt-8 text-center text-xs text-white/25 leading-relaxed">
-            A 4-minute song takes about a minute to split.
+            A 4-minute song takes about three minutes to split.
           </p>
         )}
       </div>

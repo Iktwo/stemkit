@@ -1,4 +1,6 @@
+import { useEffect, useRef, useState } from 'react'
 import type { JobProgress } from '../../../shared/types'
+import { fmtTime } from '../lib/format'
 import { XIcon } from './Icons'
 
 const STAGES: { id: JobProgress['stage']; label: string }[] = [
@@ -8,6 +10,9 @@ const STAGES: { id: JobProgress['stage']; label: string }[] = [
   { id: 'separate', label: 'Separating stems' },
   { id: 'finalize', label: 'Finishing up' }
 ]
+
+const stageOrder = (stage: JobProgress['stage'] | undefined): number =>
+  stage ? STAGES.findIndex((s) => s.id === stage) : -1
 
 interface Props {
   job: JobProgress | null
@@ -27,6 +32,46 @@ export function Processing({
   onUpdateYtDlp
 }: Props): React.ReactElement {
   const stageIndex = job ? STAGES.findIndex((s) => s.id === job.stage) : -1
+
+  const [timing, setTiming] = useState<{ elapsed: number; left: number | null } | null>(null)
+  const jobRef = useRef(job)
+  jobRef.current = job
+  const tracker = useRef<{ videoId: string | null; start: number | null; ema: number | null }>({
+    videoId: null,
+    start: null,
+    ema: null
+  })
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const j = jobRef.current
+      const t = tracker.current
+      // reset on a different job, on a retry (stage regressed), or on error
+      if (!j || j.videoId !== t.videoId || stageOrder(j.stage) < stageOrder('separate')) {
+        t.videoId = j?.videoId ?? null
+        t.start = null
+        t.ema = null
+        setTiming(null)
+        return
+      }
+      if (j.stage !== 'separate') {
+        // finalize and beyond are instant; keep the last reading frozen
+        return
+      }
+      if (t.start === null) t.start = Date.now()
+      const elapsed = Math.round((Date.now() - t.start) / 1000)
+      let left: number | null = null
+      if (j.pct >= 3) {
+        // self-calibrating estimate: elapsed over completed fraction,
+        // smoothed so phase transitions and chunky updates don't wobble
+        const projected = elapsed / (Math.min(j.pct, 99) / 100)
+        t.ema = t.ema === null ? projected : t.ema * 0.9 + projected * 0.1
+        left = Math.max(0, Math.round(t.ema - elapsed))
+      }
+      setTiming({ elapsed, left })
+    }, 1000)
+    return () => window.clearInterval(id)
+  }, [])
 
   return (
     <div className="h-full flex items-center justify-center px-8">
@@ -82,6 +127,13 @@ export function Processing({
             )
           })}
         </div>
+
+        {timing && !error && (
+          <p className="mt-4 text-center text-[11px] font-mono text-white/35">
+            elapsed {fmtTime(timing.elapsed)}
+            {timing.left !== null ? ` · ~${fmtTime(timing.left)} left` : ' · estimating…'}
+          </p>
+        )}
 
         {error && (
           <div className="mt-6 rise-in">

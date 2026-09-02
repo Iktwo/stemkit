@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { EnvStatus, JobProgress, JobStage, Song, UpdateEvent } from '../../shared/types'
+import { MODEL_DEFAULT } from '../../shared/types'
 import { parseVideoId } from '../../shared/url'
 import { Sidebar } from './components/Sidebar'
 import { Home } from './components/Home'
@@ -40,7 +41,7 @@ export default function App(): React.ReactElement {
   const [jobs, setJobs] = useState<Record<string, JobProgress>>({})
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [lastUrl, setLastUrl] = useState('')
-  const [lastModel, setLastModel] = useState('htdemucs')
+  const [lastModel, setLastModel] = useState(MODEL_DEFAULT)
   const [envLogs, setEnvLogs] = useState<EnvLog[]>([])
   const [update, setUpdate] = useState<UpdateEvent | null>(null)
   const [appVersion, setAppVersion] = useState<string | undefined>(undefined)
@@ -82,9 +83,10 @@ export default function App(): React.ReactElement {
   }, [status?.ready])
 
   const startUrl = useCallback(
-    async (url: string, model = 'htdemucs', stems?: string[]): Promise<void> => {
+    async (url: string, model: string = MODEL_DEFAULT, stems?: string[]): Promise<void> => {
       const vid = parseVideoId(url)
       if (!vid) return
+      setActiveId(vid)
       setLastUrl(url)
       setLastModel(model)
       setErrors((prev) => withoutKey(prev, vid))

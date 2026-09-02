@@ -2,7 +2,8 @@ export type StemId = 'vocals' | 'drums' | 'bass' | 'other' | 'piano' | 'guitar'
 
 export const DEFAULT_STEMS: string[] = ['vocals', 'drums', 'bass', 'other']
 
-export const MODEL_STANDARD = 'htdemucs'
+// roformer_hybrid = mel-band roformer vocals + htdemucs drums/bass/other
+export const MODEL_DEFAULT = 'roformer_hybrid'
 export const MODEL_EXTENDED = 'htdemucs_6s'
 
 export interface Song {
@@ -12,6 +13,7 @@ export interface Song {
   addedAt: number
   model?: string
   stems?: string[]
+  took?: number
 }
 
 export interface EnvStatus {

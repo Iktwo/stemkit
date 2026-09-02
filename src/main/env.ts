@@ -95,6 +95,79 @@ export function separateScript(): string {
   return join(app.getAppPath(), 'python', 'separate.py')
 }
 
+export function roformerScript(): string {
+  if (app.isPackaged) {
+    return join(process.resourcesPath, 'python', 'roformer.py')
+  }
+  return join(app.getAppPath(), 'python', 'roformer.py')
+}
+
+export function modelsDir(): string {
+  return join(userDataDir(), 'models')
+}
+
+const ENGINE_DEPS = ['beartype', 'rotary_embedding_torch', 'einops']
+let engineDepsReady = false
+
+let gpuProbe: Promise<boolean> | null = null
+
+/* true when the venv's torch can run the roformer engine on a GPU
+   (MPS on Apple Silicon, CUDA on NVIDIA). CPU-only machines stay on
+   the demucs engine, which is much faster without GPU acceleration */
+export function hasGpuAcceleration(): Promise<boolean> {
+  if (!gpuProbe) {
+    gpuProbe = runCapture(
+      venvPython(),
+      [
+        '-c',
+        'import torch;print(1 if (torch.cuda.is_available() or torch.backends.mps.is_available()) else 0)'
+      ],
+      30000
+    )
+      .then((out) => out.trim().endsWith('1'))
+      .catch(() => false)
+  }
+  return gpuProbe
+}
+
+/* venvs created before the roformer engine lack a few small packages;
+   verify and install them once per session */
+export async function ensureEngineDeps(): Promise<boolean> {
+  if (engineDepsReady) return true
+  try {
+    await runCapture(
+      venvPython(),
+      ['-c', `import ${ENGINE_DEPS.join(', ')}`],
+      20000
+    )
+    engineDepsReady = true
+    return true
+  } catch {}
+  sendEnvEvent('Preparing engine components…')
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(
+        venvPython(),
+        ['-m', 'pip', 'install', '-q', 'beartype', 'rotary-embedding-torch', 'einops'],
+        { env: { ...process.env } }
+      )
+      child.on('close', (code) =>
+        code === 0 ? resolve() : reject(new Error(`pip install failed (${code})`))
+      )
+      child.on('error', reject)
+    })
+    engineDepsReady = true
+    sendEnvEvent('Engine components ready', 'success')
+    return true
+  } catch (err) {
+    sendEnvEvent(
+      `Engine components failed: ${err instanceof Error ? err.message : String(err)}`,
+      'error'
+    )
+    return false
+  }
+}
+
 function cleanVersion(version: string): string {
   return String(version).replace(/^v/, '')
 }
@@ -434,6 +507,9 @@ export async function bootstrap(): Promise<boolean> {
          'torch==2.5.1',
         'torchaudio==2.5.1',
         'numpy<2',
+        'beartype',
+        'rotary-embedding-torch',
+        'einops',
         'yt-dlp'
       ])
       let buffer = ''

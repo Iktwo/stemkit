@@ -324,8 +324,8 @@ export function Player({ song }: Props): React.ReactElement {
                 <div className="min-w-0 flex-1">
                   <h3 className="text-xl font-semibold leading-snug truncate">{song.title}</h3>
                   <p className="text-xs text-white/45 mt-1.5 font-mono truncate">
-                    {fmtTime(song.duration)} · added {addedLabel} ·{' '}
-                    {song.model === 'htdemucs_6s' ? '6-source engine' : '4-source engine'}
+                    {fmtTime(song.duration)} · added {addedLabel}
+                    {song.took ? ` · split in ${fmtTime(song.took)}` : ''}
                   </p>
                 </div>
                 <span className="shrink-0 text-xs px-3 py-1.5 rounded-full bg-white/5 text-white/50 font-medium">
