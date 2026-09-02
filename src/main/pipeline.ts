@@ -10,6 +10,7 @@ import {
   roformerScript,
   modelsDir,
   ensureEngineDeps,
+  ensureVocalsEngine,
   hasGpuAcceleration,
   getStatus,
   ytDlpRuntimeArgs
@@ -266,11 +267,24 @@ export async function startJob(
         // the demucs phase takes roughly twice as long as the vocals pass,
         // so the bar reflects that split
         const roformerSpan = otherStems.length > 0 ? 35 : 100
+        // the first slice of the vocals phase is the engine download, when
+        // one is needed; awaiting it here means roformer.py never races
+        // the background fetch on the same checkpoint file
+        const downloadSpan = Math.round(roformerSpan * 0.3)
         if (wantsVocals) {
           if (!(await ensureEngineDeps())) {
             bail('Could not prepare the engine components for vocal separation')
           }
-          progress(job, 'separate', 0, 'Separating vocals (first run downloads a 913MB engine)')
+          await ensureVocalsEngine((pct) =>
+            progress(
+              job,
+              'separate',
+              Math.round((pct / 100) * downloadSpan),
+              `Downloading vocals engine (913MB): ${pct}%`
+            )
+          )
+          const vocalsBase = downloadSpan
+          progress(job, 'separate', vocalsBase, 'Separating vocals')
           await runProcess(
             job,
             venvPython(),
@@ -285,9 +299,12 @@ export async function startJob(
               '--device',
               'auto'
             ],
-            lineParsers((pct, msg) =>
-              msg ? pct : Math.round((pct / 100) * roformerSpan)
-            )
+            lineParsers((pct, msg) => {
+              if (!msg) return vocalsBase + Math.round((pct / 100) * (roformerSpan - vocalsBase))
+              // fallback path: roformer.py downloading the engine itself
+              const m = msg.match(/(\d+)%/)
+              return m ? Math.round((Number(m[1]) / 100) * downloadSpan) : pct
+            })
           )
         }
         if (otherStems.length > 0) {

@@ -29,7 +29,7 @@ Grab installers from [Releases](https://github.com/danielravina/stemkit/releases
 - **macOS** (Apple Silicon): `StemKit-x.y.z-mac-arm64.dmg`
 - **Windows**: `StemKit-Setup-x.y.z.exe` (installer) or portable `.zip`
 
-First launch creates a private Python environment and downloads the separation engine (~2 GB, one time) plus model weights (~80 MB). The first split also downloads the neural vocals engine (~913 MB, one time). ffmpeg is bundled — nothing else to install.
+First launch creates a private Python environment and downloads the separation engine (~2 GB) plus the neural vocals engine (~913 MB) — one time, up front. ffmpeg is bundled — nothing else to install.
 
 > **macOS first launch**: builds are signed with a Developer ID but not notarized, so macOS may say it "cannot verify the developer". One-time fix: **System Settings → Privacy & Security → Open Anyway** (or `xattr -cr /Applications/StemKit.app`).
 >

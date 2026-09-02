@@ -8,6 +8,7 @@ import {
   bootstrap,
   updateYtDlp,
   refreshReady,
+  ensureVocalsEngine,
   getStatus
 } from './env'
 import { loadSongs, removeSong, stemBuffers, stemsDir, stemsFor, mixWavPath } from './library'
@@ -102,7 +103,10 @@ async function createWindow(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
-  await refreshReady()
+  // existing install (e.g. right after an update): pre-fetch the vocals
+  // engine in the background so the first split doesn't stall on a 913MB
+  // download. Fresh installs get it during setup instead
+  if (await refreshReady()) void ensureVocalsEngine()
 
   ipcMain.handle('env:status', async () => {
     await detectTools()

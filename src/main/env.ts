@@ -1,5 +1,5 @@
 import { spawn, execFile } from 'child_process'
-import { existsSync, writeFileSync, readdirSync, createWriteStream, mkdirSync, chmodSync, unlinkSync } from 'fs'
+import { existsSync, writeFileSync, readdirSync, createWriteStream, mkdirSync, chmodSync, unlinkSync, statSync, renameSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import { app, BrowserWindow, net } from 'electron'
@@ -115,6 +115,8 @@ let gpuProbe: Promise<boolean> | null = null
    (MPS on Apple Silicon, CUDA on NVIDIA). CPU-only machines stay on
    the demucs engine, which is much faster without GPU acceleration */
 export function hasGpuAcceleration(): Promise<boolean> {
+  // test hook: simulates a CPU-only machine (the Windows path)
+  if (process.env.STEMKIT_FORCE_CPU === '1') return Promise.resolve(false)
   if (!gpuProbe) {
     gpuProbe = runCapture(
       venvPython(),
@@ -381,30 +383,67 @@ export async function refreshReady(): Promise<boolean> {
   return state.ready
 }
 
-function downloadTo(url: string, dest: string, label: string): Promise<void> {
+function downloadTo(
+  url: string,
+  dest: string,
+  label: string,
+  onProgress?: (pct: number) => void
+): Promise<void> {
   return new Promise((resolve, reject) => {
+    // download into <dest>.part so an interrupted fetch can resume and a
+    // partial file is never mistaken for the real one; rename on success
+    const part = dest + '.part'
+    const base = existsSync(part) ? statSync(part).size : 0
     let lastPct = -1
-    const req = net.request({ url, redirect: 'follow' })
+    let lastFine = -1
+    const req = net.request({
+      url,
+      redirect: 'follow',
+      ...(base > 0 ? { headers: { Range: `bytes=${base}-` } } : {})
+    })
     req.on('response', (res) => {
-      if (res.statusCode !== 200) {
+      if (res.statusCode === 416 && base > 0) {
+        // the .part already holds the whole file (killed right before the rename)
+        renameSync(part, dest)
+        onProgress?.(100)
+        resolve()
+        return
+      }
+      if (res.statusCode !== 200 && res.statusCode !== 206) {
         reject(new Error(`${label} download failed (HTTP ${res.statusCode})`))
         return
       }
-      const total = Number(res.headers['content-length'] ?? 0)
-      const out = createWriteStream(dest)
+      const resumed = res.statusCode === 206 && base > 0
+      const start = resumed ? base : 0
+      const total = start + Number(res.headers['content-length'] ?? 0)
+      const out = createWriteStream(part, { flags: resumed ? 'append' : 'w' })
       let done = 0
       res.on('data', (chunk: Buffer) => {
         done += chunk.length
         out.write(chunk)
         if (total > 0) {
-          const pct = Math.floor((done / total) * 100)
+          const pct = Math.floor(((start + done) / total) * 100)
           if (pct >= lastPct + 10) {
             lastPct = pct
             sendEnvEvent(`${label}: ${pct}%`)
           }
+          if (onProgress && pct > lastFine) {
+            lastFine = pct
+            onProgress(pct)
+          }
         }
       })
-      res.on('end', () => out.end(() => resolve()))
+      res.on('end', () =>
+        out.end(() => {
+          try {
+            renameSync(part, dest)
+            onProgress?.(100)
+            resolve()
+          } catch (e) {
+            reject(e instanceof Error ? e : new Error(String(e)))
+          }
+        })
+      )
       res.on('error', (e) => {
         out.close()
         reject(e instanceof Error ? e : new Error(String(e)))
@@ -413,6 +452,59 @@ function downloadTo(url: string, dest: string, label: string): Promise<void> {
     req.on('error', (e) => reject(e instanceof Error ? e : new Error(String(e))))
     req.end()
   })
+}
+
+/* Mel-band roformer vocals checkpoint. Fetched once per machine: during
+   setup for new installs, in the background for existing ones, and awaited
+   by the pipeline so a split never races the download. Non-fatal — the lazy
+   download inside roformer.py stays as the fallback */
+const CKPT_NAME = 'MelBandRoformer.ckpt'
+const CKPT_URL =
+  'https://huggingface.co/KimberleyJSN/melbandroformer/resolve/main/MelBandRoformer.ckpt'
+
+export function vocalsEnginePath(): string {
+  return join(modelsDir(), CKPT_NAME)
+}
+
+let vocalsEnginePromise: Promise<boolean> | null = null
+const vocalsProgressListeners = new Set<(pct: number) => void>()
+
+export function ensureVocalsEngine(onProgress?: (pct: number) => void): Promise<boolean> {
+  if (onProgress) vocalsProgressListeners.add(onProgress)
+  const detach = (): boolean => {
+    if (onProgress) vocalsProgressListeners.delete(onProgress)
+    return true
+  }
+  if (existsSync(vocalsEnginePath())) {
+    detach()
+    return Promise.resolve(true)
+  }
+  if (!vocalsEnginePromise) {
+    vocalsEnginePromise = (async () => {
+      if (!(await hasGpuAcceleration())) {
+        sendEnvEvent('No GPU acceleration — skipping the vocals engine download')
+        return false
+      }
+      mkdirSync(modelsDir(), { recursive: true })
+      sendEnvEvent('Downloading the vocals engine (~913MB, one time)')
+      await downloadTo(CKPT_URL, vocalsEnginePath(), 'vocals engine', (pct) => {
+        for (const listener of vocalsProgressListeners) listener(pct)
+      })
+      sendEnvEvent('Vocals engine ready', 'success')
+      return true
+    })()
+      .catch((err) => {
+        sendEnvEvent(
+          `Vocals engine download failed: ${err instanceof Error ? err.message : String(err)} — it will download before the first split`,
+          'error'
+        )
+        return false
+      })
+      .finally(() => {
+        vocalsEnginePromise = null
+      })
+  }
+  return vocalsEnginePromise.then(detach)
 }
 
 function extractArchive(archive: string, dest: string): Promise<void> {
@@ -563,6 +655,9 @@ export async function bootstrap(): Promise<boolean> {
     writeFileSync(join(venv, '.ready'), JSON.stringify({ createdAt: Date.now() }))
     await refreshReady()
     sendEnvEvent('Engine ready', 'success')
+    // one consolidated wait for new installs: grab the vocals engine now so
+    // the first split starts instantly (never blocks setup on failure)
+    await ensureVocalsEngine().catch(() => false)
     return true
   } catch (err) {
     sendEnvEvent(err instanceof Error ? err.message : String(err), 'error')
