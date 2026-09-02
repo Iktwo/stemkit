@@ -20,6 +20,10 @@ jobs:
 
       - run: npm ci
 
+      - name: Fetch ffmpeg (win)
+        shell: powershell
+        run: powershell -ExecutionPolicy Bypass -File scripts/fetch-ffmpeg.ps1
+
       - run: npx electron-vite build
 
       - run: npx electron-builder --win --publish never
