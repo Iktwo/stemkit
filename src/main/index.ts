@@ -14,6 +14,7 @@ import {
 import { loadSongs, removeSong, stemBuffers, stemsDir, stemsFor, mixWavPath } from './library'
 import { startJob, cancelJob, searchYouTube } from './pipeline'
 import { initUpdater } from './updater'
+import { runSmoke } from './smoke'
 
 let mainWindow: BrowserWindow | null = null
 let staticServer: Server | null = null
@@ -103,6 +104,14 @@ async function createWindow(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
+  // self-test mode for the windows-smoke CI job: bootstrap, separate a
+  // generated tone through both engines, exit 0/1 without opening a window
+  if (process.env.STEMKIT_SMOKE === '1') {
+    const ok = await runSmoke()
+    app.exit(ok ? 0 : 1)
+    return
+  }
+
   // existing install (e.g. right after an update): pre-fetch the vocals
   // engine in the background so the first split doesn't stall on a 913MB
   // download. Fresh installs get it during setup instead
