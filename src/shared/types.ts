@@ -16,12 +16,32 @@ export interface Song {
   took?: number
 }
 
+export interface AppSettings {
+  shifts: 1 | 2
+  htdemucsFt: boolean
+  roformerVocals: boolean
+}
+
+export const DEFAULT_SETTINGS: AppSettings = {
+  shifts: 1,
+  htdemucsFt: false,
+  roformerVocals: false
+}
+
+export interface EngineStatus {
+  vocalsDownloading: boolean
+  vocalsReady: boolean
+  ftDownloading: boolean
+  ftVerified: boolean
+}
+
 export interface EnvStatus {
   python: { found: boolean; path?: string; version?: string }
   ffmpeg: { found: boolean; path?: string }
   ready: boolean
   bootstrapping: boolean
   updating: boolean
+  gpu?: boolean
 }
 
 export interface EnvEvent {
@@ -83,7 +103,12 @@ export interface StemKitApi {
   openExternal(url: string): Promise<void>
   getAppVersion(): Promise<string>
   installUpdate(): void
+  getSettings(): Promise<AppSettings>
+  setSettings(patch: Partial<AppSettings>): Promise<AppSettings>
+  enginesStatus(): Promise<EngineStatus>
+  fetchEngine(which: 'vocals' | 'ft'): Promise<void>
   onUpdateEvent(cb: (ev: UpdateEvent) => void): () => void
   onJobEvent(cb: (ev: JobEvent) => void): () => void
   onEnvEvent(cb: (ev: EnvEvent) => void): () => void
+  onSettingsChange(cb: (settings: AppSettings) => void): () => void
 }

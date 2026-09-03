@@ -29,7 +29,12 @@ Grab installers from [Releases](https://github.com/danielravina/stemkit/releases
 - **macOS** (Apple Silicon): `StemKit-x.y.z-mac-arm64.dmg`
 - **Windows**: `StemKit-Setup-x.y.z.exe` (installer) or portable `.zip`
 
-First launch creates a private Python environment and downloads the separation engine (~2 GB) plus the neural vocals engine (~913 MB) — one time, up front. ffmpeg is bundled — nothing else to install.
+First launch creates a private Python environment and downloads the separation engine (~2 GB) — one time. ffmpeg is bundled — nothing else to install.
+
+Optional quality upgrades live behind a gear icon in the app (Settings), each with its own one-time download:
+- **Studio-quality vocals** (Mel-Band Roformer): +913 MB — runs on GPU or CPU (CPU is slower)
+- **Fine-tuned demucs** (htdemucs_ft): +~320 MB, up to 4× slower
+- **Refinement passes**: 2 shifts instead of 1, up to 3× slower
 
 > **macOS first launch**: builds are signed with a Developer ID but not notarized, so macOS may say it "cannot verify the developer". One-time fix: **System Settings → Privacy & Security → Open Anyway** (or `xattr -cr /Applications/StemKit.app`).
 >

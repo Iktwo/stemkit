@@ -11,10 +11,11 @@ import {
   modelsDir,
   ensureEngineDeps,
   ensureVocalsEngine,
-  hasGpuAcceleration,
+  ensureFtWeights,
   getStatus,
   ytDlpRuntimeArgs
 } from './env'
+import { loadSettings } from './settings'
 import {
   songDir,
   stemsDir,
@@ -100,15 +101,27 @@ export async function startJob(
     return
   }
 
-  // the roformer engine needs GPU acceleration to be practical; without it
-  // the job quietly stays on the demucs engine
+  // engine resolution from settings: roformer vocals when opted in (runs on
+  // CPU too — no GPU fallback by design), otherwise htdemucs / htdemucs_ft.
+  // The stored model tag encodes the variant so the cache below re-splits
+  // whenever the effective engine changes. Suffixes are appended only when
+  // non-default, so tags written by older versions stay cache-compatible
+  const settings = loadSettings()
   const wantsVocals = !stems?.length || stems.includes('vocals')
-  let model = requestedModel
-  if (requestedModel === MODEL_DEFAULT && wantsVocals && !(await hasGpuAcceleration())) {
-    model = 'htdemucs'
+  let engine: string
+  if (requestedModel === MODEL_EXTENDED) {
+    engine = requestedModel
+  } else if (requestedModel === MODEL_DEFAULT && settings.roformerVocals && wantsVocals) {
+    engine = MODEL_DEFAULT
+  } else {
+    engine = settings.htdemucsFt ? 'htdemucs_ft' : 'htdemucs'
   }
+  const modelTag =
+    engine +
+    (settings.htdemucsFt && engine !== MODEL_EXTENDED ? '-ft' : '') +
+    (settings.shifts === 2 ? '@s2' : '')
 
-  const job: ActiveJob = { videoId, model, cancelled: false }
+  const job: ActiveJob = { videoId, model: modelTag, cancelled: false }
   jobs.set(videoId, job)
   const startedAt = Date.now()
 
@@ -120,14 +133,14 @@ export async function startJob(
     const existing = loadSongs().find((s) => s.videoId === videoId)
     const covered =
       existing &&
-      existing.model === model &&
+      existing.model === modelTag &&
       !!existing.stems?.length &&
       (stems?.length ? stems.every((s) => existing.stems!.includes(s)) : true)
     if (covered && stemsPresent(videoId, stemsFor(existing))) {
       send({ kind: 'done', data: { videoId, song: existing } })
       return
     }
-    if (existing && (existing.model !== model || !stemsPresent(videoId, stemsFor(existing)))) {
+    if (existing && (existing.model !== modelTag || !stemsPresent(videoId, stemsFor(existing)))) {
       rmSync(songDir(videoId), { recursive: true, force: true })
     }
 
@@ -220,28 +233,40 @@ export async function startJob(
       let scriptError: string | null = null
       const producedStems: string[] = []
 
-      const lineParsers = (mapPct: (pct: number, msg?: string) => number) => ({
-        onLine: (line: string): void => {
-          let parsed: Record<string, unknown>
-          try {
-            parsed = JSON.parse(line)
-          } catch {
-            return
-          }
-          if (parsed.type === 'progress') {
-            const pct = Number(parsed.pct ?? 0)
-            const message =
-              typeof parsed.message === 'string' ? parsed.message : undefined
-            progress(job, 'separate', mapPct(pct, message), message)
-          } else if (parsed.type === 'error') {
-            scriptError = `Separation failed: ${String(parsed.message)}`
-          } else if (parsed.type === 'done' && Array.isArray(parsed.stems)) {
-            producedStems.push(...(parsed.stems as unknown[]).map(String))
+      const lineParsers = (mapPct: (pct: number, msg?: string) => number) => {
+        // the separate stage must never move backwards: scripts can emit
+        // multiple internal sweeps, and message-only events (pct 0) update
+        // the status text without touching the bar
+        let lastPct = 0
+        return {
+          onLine: (line: string): void => {
+            let parsed: Record<string, unknown>
+            try {
+              parsed = JSON.parse(line)
+            } catch {
+              return
+            }
+            if (parsed.type === 'progress') {
+              const pct = Number(parsed.pct ?? 0)
+              const message =
+                typeof parsed.message === 'string' ? parsed.message : undefined
+              if (message && pct === 0) {
+                progress(job, 'separate', lastPct, message)
+                return
+              }
+              const mapped = Math.max(lastPct, mapPct(pct, message))
+              lastPct = mapped
+              progress(job, 'separate', mapped, message)
+            } else if (parsed.type === 'error') {
+              scriptError = `Separation failed: ${String(parsed.message)}`
+            } else if (parsed.type === 'done' && Array.isArray(parsed.stems)) {
+              producedStems.push(...(parsed.stems as unknown[]).map(String))
+            }
           }
         }
-      })
+      }
 
-      if (model === MODEL_EXTENDED) {
+      if (engine === MODEL_EXTENDED) {
         progress(job, 'separate', 0, 'Separating stems')
         await runProcess(
           job,
@@ -256,11 +281,13 @@ export async function startJob(
             MODEL_EXTENDED,
             '--device',
             'auto',
+            '--shifts',
+            String(settings.shifts),
             ...(stems?.length ? ['--only', stems.join(',')] : [])
           ],
           lineParsers((pct) => pct)
         )
-      } else if (model === MODEL_DEFAULT) {
+      } else if (engine === MODEL_DEFAULT) {
         const otherStems = (
           stems?.length ? stems : ['drums', 'bass', 'other', 'vocals']
         ).filter((s) => s !== 'vocals')
@@ -308,6 +335,20 @@ export async function startJob(
           )
         }
         if (otherStems.length > 0) {
+          if (settings.htdemucsFt) {
+            if (
+              !(await ensureFtWeights((pct) =>
+                progress(
+                  job,
+                  'separate',
+                  wantsVocals ? roformerSpan : 0,
+                  `Downloading fine-tuned engine (~320MB): ${pct}%`
+                )
+              ))
+            ) {
+              bail('Could not download the fine-tuned engine weights')
+            }
+          }
           progress(
             job,
             'separate',
@@ -324,9 +365,11 @@ export async function startJob(
               '--out',
               stemsDir(videoId),
               '--model',
-              'htdemucs',
+              settings.htdemucsFt ? 'htdemucs_ft' : 'htdemucs',
               '--device',
               'auto',
+              '--shifts',
+              String(settings.shifts),
               '--only',
               otherStems.join(',')
             ],
@@ -339,6 +382,15 @@ export async function startJob(
         }
       } else {
         progress(job, 'separate', 0, 'Separating stems')
+        if (settings.htdemucsFt) {
+          if (
+            !(await ensureFtWeights((pct) =>
+              progress(job, 'separate', 0, `Downloading fine-tuned engine (~320MB): ${pct}%`)
+            ))
+          ) {
+            bail('Could not download the fine-tuned engine weights')
+          }
+        }
         await runProcess(
           job,
           venvPython(),
@@ -349,9 +401,11 @@ export async function startJob(
             '--out',
             stemsDir(videoId),
             '--model',
-            model,
+            engine,
             '--device',
             'auto',
+            '--shifts',
+            String(settings.shifts),
             ...(stems?.length ? ['--only', stems.join(',')] : [])
           ],
           lineParsers((pct) => pct)

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { EnvStatus, JobProgress, JobStage, Song, UpdateEvent } from '../../shared/types'
+import type { AppSettings, EnvStatus, JobProgress, JobStage, Song, UpdateEvent } from '../../shared/types'
 import { MODEL_DEFAULT } from '../../shared/types'
 import { parseVideoId } from '../../shared/url'
 import { Sidebar } from './components/Sidebar'
@@ -7,6 +7,7 @@ import { Home } from './components/Home'
 import { Processing } from './components/Processing'
 import { Player } from './components/Player'
 import { Setup } from './components/Setup'
+import { Settings } from './components/Settings'
 import { LogoMark } from './components/Icons'
 
 interface EnvLog {
@@ -45,10 +46,14 @@ export default function App(): React.ReactElement {
   const [envLogs, setEnvLogs] = useState<EnvLog[]>([])
   const [update, setUpdate] = useState<UpdateEvent | null>(null)
   const [appVersion, setAppVersion] = useState<string | undefined>(undefined)
+  const [settings, setSettings] = useState<AppSettings | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   useEffect(() => {
     void window.stemkit.envStatus().then(setStatus)
     void window.stemkit.listSongs().then(setSongs)
+    void window.stemkit.getSettings().then(setSettings)
+    const offSettings = window.stemkit.onSettingsChange(setSettings)
     const offJob = window.stemkit.onJobEvent((ev) => {
       if (ev.kind === 'progress') {
         setJobs((prev) => ({ ...prev, [ev.data.videoId]: ev.data }))
@@ -73,6 +78,7 @@ export default function App(): React.ReactElement {
       offJob()
       offEnv()
       offUpdate()
+      offSettings()
     }
   }, [])
 
@@ -223,8 +229,13 @@ export default function App(): React.ReactElement {
         hasSongs={displaySongs.length > 0}
         songs={displaySongs}
         pending={pendingMap}
+        settings={settings ?? undefined}
         onStart={(u, m, s) => void startUrl(u, m, s)}
         onSelect={(id) => setActiveId(id)}
+        onOpenSettings={() => {
+          void window.stemkit.envStatus().then(setStatus)
+          setSettingsOpen(true)
+        }}
       />
     )
   }
@@ -241,8 +252,20 @@ export default function App(): React.ReactElement {
         onDelete={(id) => void deleteSong(id)}
         onAdd={() => setActiveId(null)}
         onInstallUpdate={() => window.stemkit.installUpdate()}
+        onOpenSettings={() => {
+          void window.stemkit.envStatus().then(setStatus)
+          setSettingsOpen(true)
+        }}
       />
       <main className="flex-1 min-w-0">{main}</main>
+      {settings && settingsOpen && (
+        <Settings
+          settings={settings}
+          gpu={status.gpu}
+          onChange={(patch) => void window.stemkit.setSettings(patch)}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
     </div>
   )
 }

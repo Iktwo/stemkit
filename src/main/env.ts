@@ -3,6 +3,7 @@ import { existsSync, writeFileSync, readdirSync, createWriteStream, mkdirSync, c
 import { homedir } from 'os'
 import { join } from 'path'
 import { app, BrowserWindow, net } from 'electron'
+import type { EngineStatus } from '../shared/types'
 
 export interface ToolInfo {
   found: boolean
@@ -110,13 +111,18 @@ const ENGINE_DEPS = ['beartype', 'rotary_embedding_torch', 'einops']
 let engineDepsReady = false
 
 let gpuProbe: Promise<boolean> | null = null
+let gpuInfo: boolean | undefined
 
-/* true when the venv's torch can run the roformer engine on a GPU
-   (MPS on Apple Silicon, CUDA on NVIDIA). CPU-only machines stay on
-   the demucs engine, which is much faster without GPU acceleration */
+/* informational only: whether the venv's torch can use a GPU (MPS on Apple
+   Silicon, CUDA on NVIDIA). Engine choice no longer depends on this — it is
+   surfaced in Settings as "GPU acceleration available — fast" vs "not
+   available — CPU, slower" */
 export function hasGpuAcceleration(): Promise<boolean> {
   // test hook: simulates a CPU-only machine (the Windows path)
-  if (process.env.STEMKIT_FORCE_CPU === '1') return Promise.resolve(false)
+  if (process.env.STEMKIT_FORCE_CPU === '1') {
+    gpuInfo = false
+    return Promise.resolve(false)
+  }
   if (!gpuProbe) {
     gpuProbe = runCapture(
       venvPython(),
@@ -128,8 +134,16 @@ export function hasGpuAcceleration(): Promise<boolean> {
     )
       .then((out) => out.trim().endsWith('1'))
       .catch(() => false)
+      .then((gpu) => {
+        gpuInfo = gpu
+        return gpu
+      })
   }
   return gpuProbe
+}
+
+export function gpuAccelerationInfo(): boolean | undefined {
+  return gpuInfo
 }
 
 /* venvs created before the roformer engine lack a few small packages;
@@ -418,12 +432,15 @@ function downloadTo(
       const total = start + Number(res.headers['content-length'] ?? 0)
       const out = createWriteStream(part, { flags: resumed ? 'append' : 'w' })
       let done = 0
+      // downloads surfaced in the UI (with an onProgress observer) report
+      // finer-grained progress than the plain setup-log ones
+      const step = onProgress ? 2 : 10
       res.on('data', (chunk: Buffer) => {
         done += chunk.length
         out.write(chunk)
         if (total > 0) {
           const pct = Math.floor(((start + done) / total) * 100)
-          if (pct >= lastPct + 10) {
+          if (pct >= lastPct + step) {
             lastPct = pct
             sendEnvEvent(`${label}: ${pct}%`)
           }
@@ -454,10 +471,11 @@ function downloadTo(
   })
 }
 
-/* Mel-band roformer vocals checkpoint. Fetched once per machine: during
-   setup for new installs, in the background for existing ones, and awaited
-   by the pipeline so a split never races the download. Non-fatal — the lazy
-   download inside roformer.py stays as the fallback */
+/* Mel-band roformer vocals checkpoint. Fetched once per machine when the
+   "studio-quality vocals" setting is enabled (explicitly, non-default), and
+   awaited by the pipeline so a split never races the download. Non-fatal —
+   the lazy download inside roformer.py stays as the fallback. Runs on CPU
+   too: the toggle deliberately decouples quality from hardware */
 const CKPT_NAME = 'MelBandRoformer.ckpt'
 const CKPT_URL =
   'https://huggingface.co/KimberleyJSN/melbandroformer/resolve/main/MelBandRoformer.ckpt'
@@ -481,10 +499,6 @@ export function ensureVocalsEngine(onProgress?: (pct: number) => void): Promise<
   }
   if (!vocalsEnginePromise) {
     vocalsEnginePromise = (async () => {
-      if (!(await hasGpuAcceleration())) {
-        sendEnvEvent('No GPU acceleration — skipping the vocals engine download')
-        return false
-      }
       mkdirSync(modelsDir(), { recursive: true })
       sendEnvEvent('Downloading the vocals engine (~913MB, one time)')
       await downloadTo(CKPT_URL, vocalsEnginePath(), 'vocals engine', (pct) => {
@@ -505,6 +519,103 @@ export function ensureVocalsEngine(onProgress?: (pct: number) => void): Promise<
       })
   }
   return vocalsEnginePromise.then(detach)
+}
+
+/* htdemucs_ft checkpoint (~320MB, fine-tuned demucs). Fetched through the
+   venv's torch-hub (get_model) so the cache location and file naming match
+   exactly what separate.py expects at separation time. Progress is parsed
+   from the downloader's output and reported via env events */
+let ftWeightsPromise: Promise<boolean> | null = null
+const ftProgressListeners = new Set<(pct: number) => void>()
+let ftVerified = false
+
+// htdemucs_ft is a bag of 4 checkpoints (demucs/remote/htdemucs_ft.yaml);
+// torch-hub downloads them one after another, each with its own bar
+const FT_BAG_COUNT = 4
+
+function torchHubFetch(model: string, onProgress?: (pct: number) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      venvPython(),
+      ['-c', `from demucs.pretrained import get_model; get_model(${JSON.stringify(model)})`],
+      { env: { ...process.env } }
+    )
+    let lastPct = 0
+    let filesDone = 0
+    let stderrTail = ''
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderrTail = (stderrTail + chunk.toString()).slice(-1000)
+      for (const piece of chunk.toString().split(/[\r\n]/)) {
+        const m = piece.match(/(\d{1,3})%/)
+        if (!m) continue
+        const pct = Math.min(100, parseInt(m[1], 10))
+        if (pct < lastPct) {
+          // the next checkpoint's bar wrapped — count the previous as done
+          filesDone = Math.min(filesDone + 1, FT_BAG_COUNT - 1)
+        }
+        lastPct = pct
+        const overall = Math.min(
+          99,
+          Math.round(((filesDone + pct / 100) / FT_BAG_COUNT) * 100)
+        )
+        sendEnvEvent(`fine-tuned engine: ${overall}%`)
+        onProgress?.(overall)
+      }
+    })
+    child.on('error', reject)
+    child.on('close', (code) => {
+      if (code === 0) {
+        onProgress?.(100)
+        resolve()
+      } else {
+        reject(
+          new Error(
+            stderrTail.split('\n').filter(Boolean).slice(-1).join('') ||
+              `fine-tuned engine download exited ${code}`
+          )
+        )
+      }
+    })
+  })
+}
+
+export function ensureFtWeights(onProgress?: (pct: number) => void): Promise<boolean> {
+  if (onProgress) ftProgressListeners.add(onProgress)
+  const detach = (): boolean => {
+    if (onProgress) ftProgressListeners.delete(onProgress)
+    return true
+  }
+  if (!ftWeightsPromise) {
+    ftWeightsPromise = (async () => {
+      sendEnvEvent('Downloading the fine-tuned engine (~320MB, one time)')
+      await torchHubFetch('htdemucs_ft', (pct) => {
+        for (const listener of ftProgressListeners) listener(pct)
+      })
+      sendEnvEvent('Fine-tuned engine ready', 'success')
+      ftVerified = true
+      return true
+    })()
+      .catch((err) => {
+        sendEnvEvent(
+          `Fine-tuned engine download failed: ${err instanceof Error ? err.message : String(err)} — it will download before the next split`,
+          'error'
+        )
+        return false
+      })
+      .finally(() => {
+        ftWeightsPromise = null
+      })
+  }
+  return ftWeightsPromise.then(detach)
+}
+
+export function engineStatus(): EngineStatus {
+  return {
+    vocalsDownloading: vocalsEnginePromise !== null,
+    vocalsReady: existsSync(vocalsEnginePath()),
+    ftDownloading: ftWeightsPromise !== null,
+    ftVerified
+  }
 }
 
 function extractArchive(archive: string, dest: string): Promise<void> {
@@ -586,7 +697,7 @@ export async function bootstrap(): Promise<boolean> {
       child.on('error', reject)
     })
 
-    sendEnvEvent('Downloading the separation engine (~2GB, one time) — grab a coffee')
+    sendEnvEvent('Downloading the separation engine — grab a coffee')
     let lastGeneric = 0
     await new Promise<void>((resolve, reject) => {
       const child = spawn(pip, [
@@ -616,7 +727,7 @@ export async function bootstrap(): Promise<boolean> {
             const now = Date.now()
             if (now - lastGeneric > 8000) {
               lastGeneric = now
-              sendEnvEvent('Still downloading — this happens only once')
+              sendEnvEvent('Still downloading…')
             }
             continue
           }
@@ -655,9 +766,9 @@ export async function bootstrap(): Promise<boolean> {
     writeFileSync(join(venv, '.ready'), JSON.stringify({ createdAt: Date.now() }))
     await refreshReady()
     sendEnvEvent('Engine ready', 'success')
-    // one consolidated wait for new installs: grab the vocals engine now so
-    // the first split starts instantly (never blocks setup on failure)
-    await ensureVocalsEngine().catch(() => false)
+    // no checkpoint prefetch here: the optional engines (~913MB vocals,
+    // ~170MB fine-tuned) download only when their settings toggles are on,
+    // handled by the app-start prefetch in index.ts
     return true
   } catch (err) {
     sendEnvEvent(err instanceof Error ? err.message : String(err), 'error')

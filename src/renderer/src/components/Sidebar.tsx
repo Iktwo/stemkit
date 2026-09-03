@@ -1,6 +1,6 @@
 import type { Song } from '../../../shared/types'
 import { fmtTime } from '../lib/format'
-import { LogoMark, TrashIcon, PlusIcon } from './Icons'
+import { LogoMark, TrashIcon, PlusIcon, GearIcon } from './Icons'
 
 interface Props {
   songs: Song[]
@@ -12,6 +12,7 @@ interface Props {
   onDelete: (videoId: string) => void
   onAdd: () => void
   onInstallUpdate: () => void
+  onOpenSettings: () => void
 }
 
 export function Sidebar({
@@ -23,13 +24,21 @@ export function Sidebar({
   onSelect,
   onDelete,
   onAdd,
-  onInstallUpdate
+  onInstallUpdate,
+  onOpenSettings
 }: Props): React.ReactElement {
   return (
     <aside className="w-[264px] shrink-0 h-full flex flex-col border-r border-white/[0.07] bg-black/20">
       <div className="drag-region h-14 shrink-0 flex items-center gap-2.5 pl-[80px] pr-4">
         <LogoMark />
         <span className="font-semibold tracking-tight text-[15px]">StemKit</span>
+        <button
+          onClick={onOpenSettings}
+          title="Quality settings"
+          className="no-drag ml-auto w-7 h-7 rounded-lg bg-white/5 hover:bg-white/10 text-white/50 hover:text-white flex items-center justify-center transition-colors"
+        >
+          <GearIcon className="w-3.5 h-3.5" />
+        </button>
       </div>
 
       <div className="px-5 pb-2 pt-1 flex items-center justify-between">

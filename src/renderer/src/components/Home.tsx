@@ -3,6 +3,7 @@ import {
   MODEL_DEFAULT,
   MODEL_EXTENDED,
   DEFAULT_STEMS,
+  type AppSettings,
   type SearchResult,
   type Song,
   type StemId
@@ -10,18 +11,29 @@ import {
 import { parseVideoId } from '../../../shared/url'
 import { STEM_INFO, PREFERRED_ORDER } from '../lib/stems'
 import { fmtTime } from '../lib/format'
+import { GearIcon } from './Icons'
 
 interface Props {
   hasSongs: boolean
   songs: Song[]
   pending?: Record<string, { label: string; error?: boolean }>
+  settings?: AppSettings
   onStart: (url: string, model: string, stems?: string[]) => void
   onSelect: (videoId: string) => void
+  onOpenSettings: () => void
 }
 
 const ALL_STEMS = PREFERRED_ORDER
 
-export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props): React.ReactElement {
+export function Home({
+  hasSongs,
+  songs,
+  pending = {},
+  settings,
+  onStart,
+  onSelect,
+  onOpenSettings
+}: Props): React.ReactElement {
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<Set<StemId>>(new Set<StemId>(DEFAULT_STEMS as StemId[]))
   const [results, setResults] = useState<SearchResult[]>([])
@@ -34,6 +46,32 @@ export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props
   const usesExtended = [...selected].some((id) => id === 'guitar' || id === 'piano')
   const derivedModel = usesExtended ? MODEL_EXTENDED : MODEL_DEFAULT
   const orderedSelection = ALL_STEMS.filter((id) => selected.has(id))
+  // the fine-tuned engine only covers the standard 4-stem split; guitar and
+  // piano always run through the 6-source engine, so they're unavailable
+  // while it's on
+  const ftOn = !!settings?.htdemucsFt
+  useEffect(() => {
+    if (!ftOn) return
+    setSelected((prev) => {
+      if (!prev.has('guitar') && !prev.has('piano')) return prev
+      const next = new Set(prev)
+      next.delete('guitar')
+      next.delete('piano')
+      return next
+    })
+  }, [ftOn])
+  const engineLabel = usesExtended
+    ? '6-source engine'
+    : settings?.roformerVocals
+      ? 'studio engine'
+      : settings?.htdemucsFt
+        ? 'enhanced engine'
+        : 'standard engine'
+  const timeHint = usesExtended || settings?.roformerVocals
+    ? 'A 4-minute song takes about three minutes to split.'
+    : settings?.htdemucsFt || settings?.shifts === 2
+      ? 'A 4-minute song takes a little longer with the quality options on.'
+      : 'A 4-minute song takes about three minutes to split.'
 
   const toggleStem = (id: StemId): void => {
     setSelected((prev) => {
@@ -142,16 +180,24 @@ export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props
             <span className="text-[11px] font-semibold uppercase tracking-widest text-white/30">
               Instruments
             </span>
-            <span className="text-[11px] text-white/30 font-medium">
-              {selected.size === 0
-                ? 'select at least one'
-                : usesExtended
-                  ? `6-source engine · ${selected.size} stems`
-                  : `roformer engine · ${selected.size} stems`}
+            <span className="flex items-center gap-1.5">
+              <span className="text-[11px] text-white/30 font-medium">
+                {selected.size === 0
+                  ? 'select at least one'
+                  : `${engineLabel} · ${selected.size} stems`}
+              </span>
+              <button
+                onClick={onOpenSettings}
+                title="Quality settings"
+                className="no-drag w-5 h-5 rounded-md hover:bg-white/10 text-white/35 hover:text-white flex items-center justify-center transition-colors"
+              >
+                <GearIcon className="w-3 h-3" />
+              </button>
             </span>
           </div>
           <div className="flex items-center gap-1.5 flex-wrap">
             {ALL_STEMS.map((id) => {
+              if (ftOn && (id === 'guitar' || id === 'piano')) return null
               const info = STEM_INFO[id]
               const on = selected.has(id)
               return (
@@ -267,9 +313,7 @@ export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props
         )}
 
         {!hasSongs && results.length === 0 && !searching && (
-          <p className="mt-8 text-center text-xs text-white/25 leading-relaxed">
-            A 4-minute song takes about three minutes to split.
-          </p>
+          <p className="mt-8 text-center text-xs text-white/25 leading-relaxed">{timeHint}</p>
         )}
       </div>
     </div>

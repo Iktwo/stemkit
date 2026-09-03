@@ -3,14 +3,20 @@ import { join, normalize, extname } from 'path'
 import { existsSync, copyFileSync, mkdirSync, createReadStream, statSync } from 'fs'
 import { createServer, type Server } from 'http'
 import type { AddressInfo } from 'net'
+import type { AppSettings } from '../shared/types'
 import {
   detectTools,
   bootstrap,
   updateYtDlp,
   refreshReady,
   ensureVocalsEngine,
+  ensureFtWeights,
+  hasGpuAcceleration,
+  gpuAccelerationInfo,
+  engineStatus,
   getStatus
 } from './env'
+import { loadSettings, saveSettings } from './settings'
 import { loadSongs, removeSong, stemBuffers, stemsDir, stemsFor, mixWavPath } from './library'
 import { startJob, cancelJob, searchYouTube } from './pipeline'
 import { initUpdater } from './updater'
@@ -112,14 +118,24 @@ app.whenReady().then(async () => {
     return
   }
 
-  // existing install (e.g. right after an update): pre-fetch the vocals
-  // engine in the background so the first split doesn't stall on a 913MB
-  // download. Fresh installs get it during setup instead
-  if (await refreshReady()) void ensureVocalsEngine()
+  // existing install (e.g. right after an update): pre-fetch the engine
+  // checkpoints the user opted into, in the background, so the first split
+  // doesn't stall on a download. Nothing is fetched while both toggles are
+  // off (the defaults)
+  if (await refreshReady()) {
+    const settings = loadSettings()
+    if (settings.roformerVocals) void ensureVocalsEngine()
+    if (settings.htdemucsFt) void ensureFtWeights()
+    // warm the informational GPU probe so Settings can show it right away
+    void hasGpuAcceleration()
+  }
 
   ipcMain.handle('env:status', async () => {
     await detectTools()
-    return getStatus()
+    const status = { ...getStatus(), gpu: gpuAccelerationInfo() }
+    // the probe result lands on a later status call; never blocks ready
+    if (status.ready) void hasGpuAcceleration()
+    return status
   })
 
   ipcMain.handle('env:bootstrap', async () => {
@@ -185,6 +201,15 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('search:youtube', (_e, query: string) => searchYouTube(query))
   ipcMain.handle('app:version', () => app.getVersion())
+  ipcMain.handle('settings:get', () => loadSettings())
+  ipcMain.handle('settings:set', (_e, patch: Partial<AppSettings>) => saveSettings(patch))
+  // the renderer confirms optional-engine downloads explicitly; nothing
+  // starts as a side effect of flipping a toggle
+  ipcMain.handle('engines:status', () => engineStatus())
+  ipcMain.handle('engines:fetch', (_e, which: 'vocals' | 'ft') => {
+    if (which === 'vocals') void ensureVocalsEngine()
+    else void ensureFtWeights()
+  })
   initUpdater()
   ipcMain.handle('open-external', (_e, url: string) => {
     if (/^https:\/\/(www\.)?(youtube\.com|youtu\.be)\//.test(url)) {
