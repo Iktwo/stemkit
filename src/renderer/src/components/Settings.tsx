@@ -192,7 +192,7 @@ export function Settings({ settings, gpu, onChange, onClose }: Props): React.Rea
       onClick={onClose}
     >
       <div
-        className="glass rounded-2xl w-full max-w-md mx-4 shadow-2xl rise-in"
+        className="rounded-2xl w-full max-w-md mx-4 shadow-2xl rise-in bg-[#16151d] border border-white/[0.08]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 pt-4 pb-3 border-b border-white/[0.07]">
