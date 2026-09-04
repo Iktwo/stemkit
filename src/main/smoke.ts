@@ -12,7 +12,9 @@ import {
   roformerScript,
   modelsDir,
   bundledFfmpeg,
-  ensureEngineDeps
+  ensureEngineDeps,
+  ensureGpuEngine,
+  detectNvidiaGpu
 } from './env'
 
 /* self-test mode, driven by STEMKIT_SMOKE=1 (used by the windows-smoke CI
@@ -93,6 +95,37 @@ function generateMix(dest: string): Promise<void> {
     )
     child.on('error', reject)
   })
+}
+
+function runCapture(cmd: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { env: { ...process.env } })
+    let out = ''
+    let err = ''
+    child.stdout?.on('data', (c: Buffer) => {
+      out += c.toString()
+    })
+    child.stderr?.on('data', (c: Buffer) => {
+      err += c.toString()
+    })
+    child.on('error', reject)
+    child.on('close', (code) =>
+      code === 0 ? resolve(out) : reject(new Error(err.slice(-300) || `exit ${code}`))
+    )
+  })
+}
+
+/* the friendly cuda failure is expected on every GPU-less machine: a split
+   asked to run on cuda must exit non-zero with the actionable message rather
+   than a cryptic torch crash */
+async function expectCudaFailure(label: string, args: string[]): Promise<boolean> {
+  const result = await runScript(venvPython(), args)
+  if (result.ok || !(result.error ?? '').includes('GPU engine not available')) {
+    log(`FAIL: ${label}: expected "GPU engine not available", got ok=${result.ok} error=${result.error}`)
+    return false
+  }
+  log(`${label}: fail-fast ok`)
+  return true
 }
 
 /* our float32 WAVs are standard 44-byte headers: format 3 (IEEE float), 32 bits */
@@ -178,6 +211,60 @@ export async function runSmoke(): Promise<boolean> {
       return false
     }
     log('roformer vocals ok')
+
+    // GPU plumbing on this GPU-less runner: --device cuda must fail fast
+    // with the friendly message (on the default cpu torch, before any big
+    // downloads), and the CUDA wheel swap must install cleanly while
+    // torch.cuda.is_available() stays false (no NVIDIA driver here). The
+    // real CUDA execution path still needs a machine with an NVIDIA GPU
+    const nvidia = await detectNvidiaGpu()
+    log(`nvidia gpu detected: ${nvidia}`)
+
+    if (
+      !(await expectCudaFailure('cuda on cpu torch', [
+        separateScript(),
+        '--input', mix,
+        '--out', join(dir, 'stems-cuda-demucs'),
+        '--model', 'htdemucs',
+        '--device', 'cuda'
+      ]))
+    ) {
+      return false
+    }
+
+    if (process.env.STEMKIT_SMOKE_SKIP_GPU === '1') {
+      log('skipping GPU engine install (STEMKIT_SMOKE_SKIP_GPU=1)')
+    } else {
+      if (!(await ensureGpuEngine((pct) => log(`gpu engine install: ${pct}%`)))) {
+        log('FAIL: GPU engine (cuda torch) did not install')
+        return false
+      }
+      try {
+        const info = await runCapture(venvPython(), [
+          '-c', 'import torch;print("cuda", torch.version.cuda, int(torch.cuda.is_available()))'
+        ])
+        const [, ver, avail] = info.trim().split(/\s+/)
+        if (!ver || ver === 'None' || avail !== '0') {
+          log(`FAIL: unexpected torch cuda state: "${info.trim()}"`)
+          return false
+        }
+        log(`cuda torch ok (version.cuda=${ver}, available=0)`)
+      } catch (e) {
+        log(`FAIL: could not probe torch cuda state: ${e instanceof Error ? e.message : String(e)}`)
+        return false
+      }
+      if (
+        !(await expectCudaFailure('cuda on cuda torch without nvidia driver', [
+          roformerScript(),
+          '--input', mix,
+          '--out', join(dir, 'stems-cuda-roformer'),
+          '--ckpt-dir', modelsDir(),
+          '--device', 'cuda'
+        ]))
+      ) {
+        return false
+      }
+    }
 
     log('SMOKE RESULT: PASS')
     return true

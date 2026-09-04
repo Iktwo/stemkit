@@ -9,3 +9,4 @@ listening-list.md
 __pycache__/
 *.pyc
 .plans/
+.env

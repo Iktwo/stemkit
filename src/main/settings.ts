@@ -22,7 +22,10 @@ export function saveSettings(patch: Partial<AppSettings>): AppSettings {
   const next: AppSettings = {
     shifts: merged.shifts === 2 ? 2 : 1,
     htdemucsFt: !!merged.htdemucsFt,
-    roformerVocals: !!merged.roformerVocals
+    roformerVocals: !!merged.roformerVocals,
+    gpuSplit: !!merged.gpuSplit,
+    hideVideo: !!merged.hideVideo,
+    analytics: !!merged.analytics
   }
   writeFileSync(settingsFile(), JSON.stringify(next, null, 2))
   for (const win of BrowserWindow.getAllWindows()) {

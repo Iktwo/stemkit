@@ -188,7 +188,7 @@ export function Home({
               </span>
               <button
                 onClick={onOpenSettings}
-                title="Quality settings"
+                title="Settings"
                 className="no-drag w-5 h-5 rounded-md hover:bg-white/10 text-white/35 hover:text-white flex items-center justify-center transition-colors"
               >
                 <GearIcon className="w-3 h-3" />

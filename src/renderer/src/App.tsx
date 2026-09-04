@@ -222,7 +222,7 @@ export default function App(): React.ReactElement {
       />
     )
   } else if (activeSong) {
-    main = <Player key={activeSong.videoId} song={activeSong} />
+    main = <Player key={activeSong.videoId} song={activeSong} settings={settings ?? undefined} />
   } else {
     main = (
       <Home
@@ -262,6 +262,7 @@ export default function App(): React.ReactElement {
         <Settings
           settings={settings}
           gpu={status.gpu}
+          nvidiaGpu={status.nvidiaGpu}
           onChange={(patch) => void window.stemkit.setSettings(patch)}
           onClose={() => setSettingsOpen(false)}
         />

@@ -1,5 +1,6 @@
 import type { Song } from '../../../shared/types'
 import { fmtTime } from '../lib/format'
+import { Thumb } from '../lib/thumbs'
 import { LogoMark, TrashIcon, PlusIcon, GearIcon } from './Icons'
 
 interface Props {
@@ -34,7 +35,7 @@ export function Sidebar({
         <span className="font-semibold tracking-tight text-[15px]">StemKit</span>
         <button
           onClick={onOpenSettings}
-          title="Quality settings"
+          title="Settings"
           className="no-drag ml-auto w-7 h-7 rounded-lg bg-white/5 hover:bg-white/10 text-white/50 hover:text-white flex items-center justify-center transition-colors"
         >
           <GearIcon className="w-3.5 h-3.5" />
@@ -76,11 +77,9 @@ export function Sidebar({
               }`}
             >
               <span className="relative shrink-0">
-                <img
-                  src={`https://i.ytimg.com/vi/${song.videoId}/default.jpg`}
-                  alt=""
-                  className={`w-12 h-[27px] rounded-md object-cover bg-white/5 ${working ? 'opacity-70' : ''}`}
-                  draggable={false}
+                <Thumb
+                  videoId={song.videoId}
+                  className={`w-12 h-[27px] rounded-md object-cover bg-white/5 block ${working ? 'opacity-70' : ''}`}
                 />
                 {working && (
                   <span className="absolute inset-0 flex items-center justify-center">

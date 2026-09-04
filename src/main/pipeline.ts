@@ -12,6 +12,7 @@ import {
   ensureEngineDeps,
   ensureVocalsEngine,
   ensureFtWeights,
+  ensureGpuEngine,
   getStatus,
   ytDlpRuntimeArgs
 } from './env'
@@ -27,8 +28,10 @@ import {
   loadSongs
 } from './library'
 import type { JobEvent, JobStage } from '../shared/types'
-import { MODEL_DEFAULT, MODEL_EXTENDED } from '../shared/types'
+import { MODEL_DEFAULT, MODEL_EXTENDED, DEFAULT_STEMS } from '../shared/types'
 import { parseVideoId } from '../shared/url'
+import { track } from './analytics'
+import { cacheThumbnail } from './thumbs'
 
 interface ActiveJob {
   videoId: string
@@ -121,6 +124,15 @@ export async function startJob(
     (settings.htdemucsFt && engine !== MODEL_EXTENDED ? '-ft' : '') +
     (settings.shifts === 2 ? '@s2' : '')
 
+  // windows honors the GPU toggle: 'cpu' is passed explicitly because
+  // roformer.py's 'auto' prefers CUDA whenever the venv's torch supports it.
+  // macOS keeps 'auto' (MPS when available)
+  const useGpu = settings.gpuSplit && process.platform === 'win32'
+  const deviceArg = (): string => {
+    if (process.platform === 'win32') return useGpu ? 'cuda' : 'cpu'
+    return 'auto'
+  }
+
   const job: ActiveJob = { videoId, model: modelTag, cancelled: false }
   jobs.set(videoId, job)
   const startedAt = Date.now()
@@ -144,6 +156,11 @@ export async function startJob(
       rmSync(songDir(videoId), { recursive: true, force: true })
     }
 
+    track('split_started', {
+      model: modelTag,
+      stems: stems?.length ?? DEFAULT_STEMS.length,
+      gpu: useGpu
+    })
     mkdirSync(songDir(videoId), { recursive: true })
     progress(job, 'metadata', 0, 'Reading video info')
 
@@ -160,6 +177,8 @@ export async function startJob(
         title: typeof parsed.title === 'string' ? parsed.title : 'Unknown title',
         duration: typeof parsed.duration === 'number' ? Math.round(parsed.duration) : 0
       }
+      // warm the thumbnail cache for offline library browsing
+      void cacheThumbnail(videoId, typeof parsed.thumbnail === 'string' ? parsed.thumbnail : undefined)
     } catch {
       bail('Could not read video metadata')
     }
@@ -230,6 +249,17 @@ export async function startJob(
     const release = await acquireSeparation()
     try {
       if (job.cancelled || !jobs.has(videoId)) return
+      // self-heal the GPU engine: the toggle may be on before the CUDA torch
+      // download has run (fresh setting, or a failed earlier attempt)
+      if (useGpu) {
+        if (
+          !(await ensureGpuEngine((pct) =>
+            progress(job, 'separate', 0, `Downloading GPU engine: ${pct}%`)
+          ))
+        ) {
+          bail('Could not prepare the GPU engine — switch back to CPU in Settings and try again')
+        }
+      }
       let scriptError: string | null = null
       const producedStems: string[] = []
 
@@ -280,7 +310,7 @@ export async function startJob(
             '--model',
             MODEL_EXTENDED,
             '--device',
-            'auto',
+            deviceArg(),
             '--shifts',
             String(settings.shifts),
             ...(stems?.length ? ['--only', stems.join(',')] : [])
@@ -324,7 +354,7 @@ export async function startJob(
               '--ckpt-dir',
               modelsDir(),
               '--device',
-              'auto'
+              deviceArg()
             ],
             lineParsers((pct, msg) => {
               if (!msg) return vocalsBase + Math.round((pct / 100) * (roformerSpan - vocalsBase))
@@ -367,7 +397,7 @@ export async function startJob(
               '--model',
               settings.htdemucsFt ? 'htdemucs_ft' : 'htdemucs',
               '--device',
-              'auto',
+              deviceArg(),
               '--shifts',
               String(settings.shifts),
               '--only',
@@ -403,7 +433,7 @@ export async function startJob(
             '--model',
             engine,
             '--device',
-            'auto',
+            deviceArg(),
             '--shifts',
             String(settings.shifts),
             ...(stems?.length ? ['--only', stems.join(',')] : [])
@@ -418,6 +448,7 @@ export async function startJob(
       if (!stemsPresent(videoId, producedStems)) bail('Separation finished but stem files are missing')
 
       progress(job, 'finalize', 100, 'Adding to library')
+      const took = Math.round((Date.now() - startedAt) / 1000)
       const songs = upsertSong({
         videoId,
         title: meta!.title,
@@ -425,8 +456,9 @@ export async function startJob(
         addedAt: existing?.addedAt ?? Date.now(),
         model: job.model,
         stems: producedStems,
-        took: Math.round((Date.now() - startedAt) / 1000)
+        took
       })
+      track('split_completed', { model: job.model, stems: producedStems.length, took })
       send({ kind: 'done', data: { videoId, song: songs[0] } })
     } finally {
       release()
@@ -434,6 +466,7 @@ export async function startJob(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     if (message !== 'cancelled') {
+      track('split_failed', { model: job.model })
       send({ kind: 'failed', data: { videoId, message } })
     }
   } finally {
@@ -533,7 +566,7 @@ export async function searchYouTube(query: string): Promise<
   try {
     const data = JSON.parse(results)
     const entries = Array.isArray(data.entries) ? data.entries : []
-    return entries
+    const mapped = entries
       .filter((e: Record<string, unknown>) => typeof e.id === 'string' && typeof e.title === 'string')
       .map((e: Record<string, unknown>) => ({
         videoId: e.id as string,
@@ -546,6 +579,8 @@ export async function searchYouTube(query: string): Promise<
               : undefined,
         duration: typeof e.duration === 'number' ? Math.round(e.duration) : undefined
       }))
+    track('search', { results: mapped.length })
+    return mapped
   } catch {
     return []
   }

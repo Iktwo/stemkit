@@ -222,6 +222,10 @@ def main():
     vendor = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor")
     sys.path.insert(0, vendor)
 
+    # fail fast before the ~913MB checkpoint download on GPU-less machines
+    if args.device == "cuda" and not torch.cuda.is_available():
+        fail("GPU engine not available (no NVIDIA GPU, or the CUDA build of torch is not installed)")
+
     ckpt_path = os.path.join(args.ckpt_dir, CKPT_NAME)
     if not os.path.exists(ckpt_path):
         emit(type="progress", stage="separate", pct=0, message="Downloading vocals engine (913MB, one time)")

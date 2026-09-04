@@ -1,8 +1,11 @@
 name: windows-smoke
 
 # installs the NSIS build silently, then runs the app's self-test mode
-# (STEMKIT_SMOKE=1): full bootstrap on a python-less runner + separating a
-# generated tone through both engines. Run manually before cutting a release
+# (STEMKIT_SMOKE=1): full bootstrap on a python-less runner, separating a
+# generated tone through both engines on CPU, then the GPU plumbing: the
+# cuda fail-fast paths plus the CUDA engine install (torch.version.cuda set,
+# cuda.is_available() still false with no NVIDIA driver). Run manually before
+# cutting a release
 on:
   workflow_dispatch:
   workflow_call:
@@ -10,7 +13,9 @@ on:
 jobs:
   smoke:
     runs-on: windows-latest
-    timeout-minutes: 45
+    # the GPU section adds a ~2.5GB CUDA torch install (skippable via
+    # STEMKIT_SMOKE_SKIP_GPU=1); real CUDA execution needs NVIDIA hardware
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 

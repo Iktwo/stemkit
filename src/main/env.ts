@@ -146,6 +146,38 @@ export function gpuAccelerationInfo(): boolean | undefined {
   return gpuInfo
 }
 
+let nvidiaProbe: Promise<boolean> | null = null
+let nvidiaInfo: boolean | undefined
+
+/* windows only: whether an NVIDIA GPU is present (nvidia-smi ships with the
+   driver). Gates the GPU-acceleration toggle in Settings */
+export function detectNvidiaGpu(): Promise<boolean> {
+  if (!IS_WIN) {
+    nvidiaInfo = false
+    return Promise.resolve(false)
+  }
+  if (!nvidiaProbe) {
+    nvidiaProbe = runCapture(
+      'nvidia-smi',
+      ['--query-gpu=name,memory.total', '--format=csv,noheader'],
+      10000
+    )
+      .then((out) => {
+        nvidiaInfo = /nvidia/i.test(out)
+        return nvidiaInfo
+      })
+      .catch(() => {
+        nvidiaInfo = false
+        return false
+      })
+  }
+  return nvidiaProbe
+}
+
+export function nvidiaGpuInfo(): boolean | undefined {
+  return nvidiaInfo
+}
+
 /* venvs created before the roformer engine lack a few small packages;
    verify and install them once per session */
 export async function ensureEngineDeps(): Promise<boolean> {
@@ -609,12 +641,120 @@ export function ensureFtWeights(onProgress?: (pct: number) => void): Promise<boo
   return ftWeightsPromise.then(detach)
 }
 
+/* CUDA build of torch (windows + nvidia). The default bootstrap installs the
+   CPU wheel from PyPI; this swaps in the cu121 build (~2.5GB download) on
+   demand when the GPU-acceleration toggle is enabled. It stays installed when
+   the toggle goes back off — CUDA torch handles cpu devices fine */
+const GPU_TORCH_VERSION = '2.5.1'
+const GPU_TORCH_INDEX = 'https://download.pytorch.org/whl/cu121'
+
+let gpuEnginePromise: Promise<boolean> | null = null
+const gpuProgressListeners = new Set<(pct: number) => void>()
+
+export function ensureGpuEngine(onProgress?: (pct: number) => void): Promise<boolean> {
+  if (onProgress) gpuProgressListeners.add(onProgress)
+  const detach = (): boolean => {
+    if (onProgress) gpuProgressListeners.delete(onProgress)
+    return true
+  }
+  if (!IS_WIN) {
+    detach()
+    return Promise.resolve(false)
+  }
+  if (!gpuEnginePromise) {
+    gpuEnginePromise = (async () => {
+      // already swapped in: the venv's torch speaks CUDA, nothing to install
+      if (await hasGpuAcceleration()) return true
+      sendEnvEvent('Downloading the GPU engine (~2.5GB, one time)')
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn(
+          venvPython(),
+          [
+            '-m',
+            'pip',
+            'install',
+            '--no-cache-dir',
+            `torch==${GPU_TORCH_VERSION}`,
+            `torchaudio==${GPU_TORCH_VERSION}`,
+            '--index-url',
+            GPU_TORCH_INDEX
+          ],
+          { env: { ...process.env } }
+        )
+        let lastPct = 0
+        let stderrTail = ''
+        child.stdout?.on('data', (chunk: Buffer) => {
+          const t = chunk.toString().trim()
+          if (/^(Collecting|Downloading|Installing)/i.test(t)) sendEnvEvent(t.slice(0, 200))
+        })
+        child.stderr?.on('data', (chunk: Buffer) => {
+          stderrTail = (stderrTail + chunk.toString()).slice(-1000)
+          for (const piece of chunk.toString().split(/[\r\n]/)) {
+            const pct = pipProgressPct(piece)
+            if (pct === null || pct <= lastPct) continue
+            lastPct = Math.min(99, pct)
+            sendEnvEvent(`GPU engine: ${lastPct}%`)
+            for (const listener of gpuProgressListeners) listener(lastPct)
+          }
+        })
+        child.on('error', reject)
+        child.on('close', (code) => {
+          if (code === 0) {
+            resolve()
+            return
+          }
+          reject(
+            new Error(
+              stderrTail.split('\n').filter(Boolean).slice(-1).join('') ||
+                `GPU engine install exited ${code}`
+            )
+          )
+        })
+      })
+      // refresh the cached cuda probe so Settings' status lines update
+      gpuProbe = null
+      gpuInfo = undefined
+      void hasGpuAcceleration()
+      sendEnvEvent('GPU engine ready', 'success')
+      return true
+    })()
+      .catch((err) => {
+        sendEnvEvent(
+          `GPU engine install failed: ${err instanceof Error ? err.message : String(err)}`,
+          'error'
+        )
+        return false
+      })
+      .finally(() => {
+        gpuEnginePromise = null
+      })
+  }
+  return gpuEnginePromise.then(detach)
+}
+
+/* pip progress bars report absolute sizes ("45.2/2450.0 MB") rather than
+   percentages; tqdm-style output reports "%" directly */
+function pipProgressPct(line: string): number | null {
+  const pct = line.match(/(\d{1,3})%/)
+  if (pct) return parseInt(pct[1], 10)
+  const sizes = line.match(/([\d.]+)\s*\/\s*([\d.]+)\s*(GB|MB)/i)
+  if (sizes) {
+    const scale = sizes[3].toUpperCase() === 'GB' ? 1024 : 1
+    const done = parseFloat(sizes[1]) * scale
+    const total = parseFloat(sizes[2]) * scale
+    if (total > 0) return Math.round((done / total) * 100)
+  }
+  return null
+}
+
 export function engineStatus(): EngineStatus {
   return {
     vocalsDownloading: vocalsEnginePromise !== null,
     vocalsReady: existsSync(vocalsEnginePath()),
     ftDownloading: ftWeightsPromise !== null,
-    ftVerified
+    ftVerified,
+    gpuDownloading: gpuEnginePromise !== null,
+    gpuReady: IS_WIN && gpuInfo === true
   }
 }
 

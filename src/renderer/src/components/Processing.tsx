@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { JobProgress } from '../../../shared/types'
 import { fmtTime } from '../lib/format'
+import { Thumb } from '../lib/thumbs'
 import { XIcon } from './Icons'
 
 const STAGES: { id: JobProgress['stage']; label: string }[] = [
@@ -78,10 +79,9 @@ export function Processing({
       <div className="w-full max-w-md glass rounded-2xl p-7 rise-in">
         <div className="flex items-center gap-3.5">
           {job?.videoId ? (
-            <img
-              src={`https://i.ytimg.com/vi/${job.videoId}/default.jpg`}
-              alt=""
-              className="w-16 h-9 rounded-lg object-cover bg-white/5"
+            <Thumb
+              videoId={job.videoId}
+              className="w-16 h-9 rounded-lg object-cover bg-white/5 block"
             />
           ) : (
             <span className="w-10 h-10 rounded-full border-2 border-white/20 border-t-violet-300 animate-spin" />

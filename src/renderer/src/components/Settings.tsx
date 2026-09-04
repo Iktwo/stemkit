@@ -5,6 +5,7 @@ import { XIcon } from './Icons'
 interface Props {
   settings: AppSettings
   gpu?: boolean
+  nvidiaGpu?: boolean
   onChange: (patch: Partial<AppSettings>) => void
   onClose: () => void
 }
@@ -101,14 +102,23 @@ function ConfirmButton({ label, onClick }: { label: string; onClick: () => void 
   )
 }
 
-export function Settings({ settings, gpu, onChange, onClose }: Props): React.ReactElement {
+function SectionHeader({ label }: { label: string }): React.ReactElement {
+  return (
+    <h3 className="text-[11px] font-semibold uppercase tracking-widest text-white/30">{label}</h3>
+  )
+}
+
+export function Settings({ settings, gpu, nvidiaGpu, onChange, onClose }: Props): React.ReactElement {
   const [engines, setEngines] = useState<EngineStatus | null>(null)
   const [vocalsPct, setVocalsPct] = useState<number | null>(null)
   const [ftPct, setFtPct] = useState<number | null>(null)
+  const [gpuPct, setGpuPct] = useState<number | null>(null)
   const [vocalsError, setVocalsError] = useState<string | null>(null)
   const [ftError, setFtError] = useState<string | null>(null)
+  const [gpuError, setGpuError] = useState<string | null>(null)
   const [vocalsStarting, setVocalsStarting] = useState(false)
   const [ftStarting, setFtStarting] = useState(false)
+  const [gpuStarting, setGpuStarting] = useState(false)
 
   useEffect(() => {
     const off = window.stemkit.onEnvEvent((e) => {
@@ -127,6 +137,14 @@ export function Settings({ settings, gpu, onChange, onClose }: Props): React.Rea
       }
       if (/Fine-tuned engine ready/.test(e.message)) setFtPct(100)
       if (/Fine-tuned engine download failed/.test(e.message)) setFtError(e.message)
+
+      const gpuEngine = e.message.match(/GPU engine: (\d+)%/)
+      if (gpuEngine) {
+        setGpuPct(parseInt(gpuEngine[1], 10))
+        setGpuError(null)
+      }
+      if (/GPU engine ready/.test(e.message)) setGpuPct(100)
+      if (/GPU engine install failed/.test(e.message)) setGpuError(e.message)
     })
     return off
   }, [])
@@ -141,6 +159,7 @@ export function Settings({ settings, gpu, onChange, onClose }: Props): React.Rea
         setEngines(s)
         if (s.vocalsDownloading || s.vocalsReady) setVocalsStarting(false)
         if (s.ftDownloading || s.ftVerified) setFtStarting(false)
+        if (s.gpuDownloading || s.gpuReady) setGpuStarting(false)
       })
     }
     tick()
@@ -162,15 +181,20 @@ export function Settings({ settings, gpu, onChange, onClose }: Props): React.Rea
   const gpuLine =
     gpu === true
       ? 'Uses your GPU — fast'
-      : gpu === false
-        ? 'No GPU found — expect ~20-35 min per song on CPU'
-        : null
+      : gpu === false && nvidiaGpu
+        ? 'Running on CPU — enable GPU acceleration below for much faster splits'
+        : gpu === false
+          ? 'No GPU found — expect ~20-35 min per song on CPU'
+          : null
 
   const vocalsBusy = vocalsStarting || (engines?.vocalsDownloading ?? false)
   const ftBusy = ftStarting || (engines?.ftDownloading ?? false)
+  const gpuBusy = gpuStarting || (engines?.gpuDownloading ?? false)
   const showVocalsConfirm =
     !!engines && settings.roformerVocals && !engines.vocalsReady && !vocalsBusy
   const showFtConfirm = !!engines && settings.htdemucsFt && !engines.ftVerified && !ftBusy
+  const showGpuConfirm =
+    !!engines && settings.gpuSplit && nvidiaGpu && !engines.gpuReady && !gpuBusy
 
   const startVocals = (): void => {
     setVocalsStarting(true)
@@ -186,6 +210,13 @@ export function Settings({ settings, gpu, onChange, onClose }: Props): React.Rea
     void window.stemkit.fetchEngine('ft')
   }
 
+  const startGpu = (): void => {
+    setGpuStarting(true)
+    setGpuPct(null)
+    setGpuError(null)
+    void window.stemkit.fetchEngine('gpu')
+  }
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
@@ -196,7 +227,7 @@ export function Settings({ settings, gpu, onChange, onClose }: Props): React.Rea
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 pt-4 pb-3 border-b border-white/[0.07]">
-          <h2 className="text-[14px] font-semibold tracking-tight">Quality settings</h2>
+          <h2 className="text-[14px] font-semibold tracking-tight">Settings</h2>
           <button
             onClick={onClose}
             title="Close"
@@ -206,80 +237,136 @@ export function Settings({ settings, gpu, onChange, onClose }: Props): React.Rea
           </button>
         </div>
 
-        <div className="px-5 py-4 space-y-5">
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
-              <p className="text-[13px] font-medium">Studio-quality vocals</p>
-              <p className="text-[11.5px] text-white/40 leading-relaxed mt-0.5">
-                Cleaner, more natural vocal separation.
-              </p>
-              {gpuLine && <p className="text-[11px] text-white/30 mt-1">{gpuLine}</p>}
-              <DownloadBar pct={vocalsPct} starting={vocalsBusy && vocalsPct === null} error={vocalsError} />
-              {showVocalsConfirm && (
-                <ConfirmButton label="Download now · 913 MB" onClick={startVocals} />
-              )}
+        <div className="px-5 py-4 space-y-6 max-h-[70vh] overflow-y-auto">
+          <section className="space-y-5">
+            <SectionHeader label="Separation" />
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-[13px] font-medium">Studio-quality vocals</p>
+                <p className="text-[11.5px] text-white/40 leading-relaxed mt-0.5">
+                  Cleaner, more natural vocal separation.
+                </p>
+                {gpuLine && <p className="text-[11px] text-white/30 mt-1">{gpuLine}</p>}
+                <DownloadBar pct={vocalsPct} starting={vocalsBusy && vocalsPct === null} error={vocalsError} />
+                {showVocalsConfirm && (
+                  <ConfirmButton label="Download now · 913 MB" onClick={startVocals} />
+                )}
+              </div>
+              <Toggle
+                on={settings.roformerVocals}
+                disabled={vocalsBusy}
+                loading={vocalsBusy}
+                onClick={() => onChange({ roformerVocals: !settings.roformerVocals })}
+              />
             </div>
-            <Toggle
-              on={settings.roformerVocals}
-              disabled={vocalsBusy}
-              loading={vocalsBusy}
-              onClick={() => onChange({ roformerVocals: !settings.roformerVocals })}
-            />
-          </div>
 
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
-              <p className="text-[13px] font-medium">Cleaner instruments</p>
-              <p className="text-[11.5px] text-white/40 leading-relaxed mt-0.5">
-                Extra polish for drums, bass and other. Up to 4× slower.
-              </p>
-              <DownloadBar pct={ftPct} starting={ftBusy && ftPct === null} error={ftError} />
-              {showFtConfirm && (
-                <ConfirmButton label="Download now · ~320 MB" onClick={startFt} />
-              )}
-            </div>
-            <Toggle
-              on={settings.htdemucsFt}
-              disabled={ftBusy}
-              loading={ftBusy}
-              onClick={() => onChange({ htdemucsFt: !settings.htdemucsFt })}
-            />
-          </div>
+            {nvidiaGpu && (
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="text-[13px] font-medium">GPU acceleration</p>
+                  <p className="text-[11.5px] text-white/40 leading-relaxed mt-0.5">
+                    Use your NVIDIA GPU for much faster splits.
+                  </p>
+                  <DownloadBar pct={gpuPct} starting={gpuBusy && gpuPct === null} error={gpuError} />
+                  {showGpuConfirm && (
+                    <ConfirmButton label="Download now · ~2.5 GB" onClick={startGpu} />
+                  )}
+                </div>
+                <Toggle
+                  on={settings.gpuSplit}
+                  disabled={gpuBusy}
+                  loading={gpuBusy}
+                  onClick={() => onChange({ gpuSplit: !settings.gpuSplit })}
+                />
+              </div>
+            )}
 
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
-              <p className="text-[13px] font-medium">Extra quality pass</p>
-              <p className="text-[11.5px] text-white/40 leading-relaxed mt-0.5">
-                Separates the song twice and blends the takes for cleaner results. Up to 3×
-                slower.
-              </p>
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-[13px] font-medium">Cleaner instruments</p>
+                <p className="text-[11.5px] text-white/40 leading-relaxed mt-0.5">
+                  Extra polish for drums, bass and other. Up to 4× slower.
+                </p>
+                <DownloadBar pct={ftPct} starting={ftBusy && ftPct === null} error={ftError} />
+                {showFtConfirm && (
+                  <ConfirmButton label="Download now · ~320 MB" onClick={startFt} />
+                )}
+              </div>
+              <Toggle
+                on={settings.htdemucsFt}
+                disabled={ftBusy}
+                loading={ftBusy}
+                onClick={() => onChange({ htdemucsFt: !settings.htdemucsFt })}
+              />
             </div>
-            <div className="flex shrink-0 rounded-lg bg-white/[0.06] p-0.5 border border-white/[0.08]">
-              {([
-                { v: 1 as const, label: 'Fast' },
-                { v: 2 as const, label: 'Best' }
-              ]).map((opt) => (
-                <button
-                  key={opt.v}
-                  onClick={() => onChange({ shifts: opt.v })}
-                  className={`no-drag px-2.5 h-6 rounded-md text-[12px] font-semibold transition-colors ${
-                    settings.shifts === opt.v
-                      ? 'bg-white text-black'
-                      : 'text-white/45 hover:text-white/80'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
 
-        <div className="px-5 py-3 border-t border-white/[0.07]">
-          <p className="text-[11px] text-white/30 leading-relaxed">
-            Changes apply to future splits. Songs you already split keep their current sound —
-            split them again to use the new settings.
-          </p>
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-[13px] font-medium">Extra quality pass</p>
+                <p className="text-[11.5px] text-white/40 leading-relaxed mt-0.5">
+                  Separates the song twice and blends the takes for cleaner results. Up to 3×
+                  slower.
+                </p>
+              </div>
+              <div className="flex shrink-0 rounded-lg bg-white/[0.06] p-0.5 border border-white/[0.08]">
+                {([
+                  { v: 1 as const, label: 'Fast' },
+                  { v: 2 as const, label: 'Best' }
+                ]).map((opt) => (
+                  <button
+                    key={opt.v}
+                    onClick={() => onChange({ shifts: opt.v })}
+                    className={`no-drag px-2.5 h-6 rounded-md text-[12px] font-semibold transition-colors ${
+                      settings.shifts === opt.v
+                        ? 'bg-white text-black'
+                        : 'text-white/45 hover:text-white/80'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <p className="text-[11px] text-white/30 leading-relaxed">
+              Changes apply to future splits. Songs you already split keep their current sound —
+              split them again to use the new settings.
+            </p>
+          </section>
+
+          <section className="pt-5 border-t border-white/[0.06] space-y-5">
+            <SectionHeader label="Playback" />
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-[13px] font-medium">Hide YouTube video</p>
+                <p className="text-[11.5px] text-white/40 leading-relaxed mt-0.5">
+                  Stems always play locally from your library. This stops streaming the video
+                  while you play and uses cached thumbnails instead.
+                </p>
+              </div>
+              <Toggle
+                on={settings.hideVideo}
+                onClick={() => onChange({ hideVideo: !settings.hideVideo })}
+              />
+            </div>
+          </section>
+
+          <section className="pt-5 border-t border-white/[0.06] space-y-5">
+            <SectionHeader label="Privacy" />
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-[13px] font-medium">Anonymous usage stats</p>
+                <p className="text-[11.5px] text-white/40 leading-relaxed mt-0.5">
+                  On by default. Helps improve StemKit with anonymous events (app version, OS,
+                  actions). Song titles, links and audio never leave your machine.
+                </p>
+              </div>
+              <Toggle
+                on={settings.analytics}
+                onClick={() => onChange({ analytics: !settings.analytics })}
+              />
+            </div>
+          </section>
         </div>
       </div>
     </div>

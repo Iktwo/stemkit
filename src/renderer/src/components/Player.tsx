@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { Song, StemId } from '../../../shared/types'
+import type { AppSettings, Song, StemId } from '../../../shared/types'
 import { engine, decodePayload, type BufferMap } from '../lib/engine'
 import { buildStemMeta } from '../lib/stems'
 import { fmtTime } from '../lib/format'
+import { Thumb } from '../lib/thumbs'
 import { YouTubeHost, type YTState } from '../lib/youtube'
 import { StemLane } from './StemLane'
 import { Transport, type PresetId } from './Transport'
@@ -29,9 +30,10 @@ function getDecoded(videoId: string): Promise<BufferCacheMap> {
 
 interface Props {
   song: Song
+  settings?: AppSettings
 }
 
-export function Player({ song }: Props): React.ReactElement {
+export function Player({ song, settings }: Props): React.ReactElement {
   const containerRef = useRef<HTMLDivElement>(null)
   const hostRef = useRef<YouTubeHost | null>(null)
   const posRef = useRef(0)
@@ -58,6 +60,9 @@ export function Player({ song }: Props): React.ReactElement {
   const stemMeta = useMemo(() => buildStemMeta(Object.keys(buffers) as StemId[]), [buffers])
 
   const youtubeUrl = `https://www.youtube.com/watch?v=${song.videoId}`
+  // stems always play locally from the library; hiding the video just stops
+  // streaming it from YouTube (and switches thumbnails to the local cache)
+  const hideVideo = settings?.hideVideo ?? false
   const addedLabel = new Date(song.addedAt).toLocaleDateString(undefined, {
     month: 'short',
     day: 'numeric',
@@ -106,6 +111,12 @@ export function Player({ song }: Props): React.ReactElement {
   }, [song.videoId])
 
   useEffect(() => {
+    if (hideVideo) {
+      hostRef.current?.destroy()
+      hostRef.current = null
+      setYtReady(false)
+      return
+    }
     if (decoding || decodeError || hostRef.current) return
     let disposed = false
     const container = containerRef.current
@@ -130,7 +141,7 @@ export function Player({ song }: Props): React.ReactElement {
     return () => {
       disposed = true
     }
-  }, [song.videoId, decoding, decodeError])
+  }, [song.videoId, decoding, decodeError, hideVideo])
 
   useEffect(() => {
     engine.applyMix(vols, mutes, solos, master)
@@ -197,8 +208,9 @@ export function Player({ song }: Props): React.ReactElement {
       engine.setPlaying(true, posRef.current)
       hostRef.current?.play()
       setPlaying(true)
+      window.stemkit.trackEvent('playback_started', { video_hidden: hideVideo })
     }
-  }, [decoding, decodeError])
+  }, [decoding, decodeError, hideVideo])
 
   const seekTo = useCallback(
     (t: number): void => {
@@ -294,32 +306,32 @@ export function Player({ song }: Props): React.ReactElement {
       <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-6">
         <div className="max-w-6xl mx-auto">
           <div className="flex items-stretch gap-4 h-[220px]">
-            <div className="relative w-[391px] shrink-0">
-              <div className="absolute -inset-4 bg-violet-500/10 blur-3xl rounded-full pointer-events-none" />
-              <div className="absolute inset-0 rounded-xl overflow-hidden ring-1 ring-white/10 bg-black shadow-2xl shadow-black/60">
-                <div ref={containerRef} className="absolute inset-0 [&_iframe]:w-full [&_iframe]:h-full" />
-                {!ytReady && (
-                  <div className="absolute inset-0 flex items-center justify-center animate-pulse">
-                    <span className="text-[10px] text-white/40 tracking-widest uppercase">loading…</span>
-                  </div>
-                )}
-                {decodeError && (
-                  <div className="absolute inset-x-3 bottom-3 flex justify-center rise-in">
-                    <div className="glass rounded-lg px-3 py-1.5 text-xs text-rose-300 break-words">
-                      {decodeError}
+            {!hideVideo && (
+              <div className="relative w-[391px] shrink-0">
+                <div className="absolute -inset-4 bg-violet-500/10 blur-3xl rounded-full pointer-events-none" />
+                <div className="absolute inset-0 rounded-xl overflow-hidden ring-1 ring-white/10 bg-black shadow-2xl shadow-black/60">
+                  <div ref={containerRef} className="absolute inset-0 [&_iframe]:w-full [&_iframe]:h-full" />
+                  {!ytReady && (
+                    <div className="absolute inset-0 flex items-center justify-center animate-pulse">
+                      <span className="text-[10px] text-white/40 tracking-widest uppercase">loading…</span>
                     </div>
-                  </div>
-                )}
+                  )}
+                  {decodeError && (
+                    <div className="absolute inset-x-3 bottom-3 flex justify-center rise-in">
+                      <div className="glass rounded-lg px-3 py-1.5 text-xs text-rose-300 break-words">
+                        {decodeError}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
+            )}
 
             <aside className="flex-1 min-w-0 glass rounded-2xl px-6 py-5 rise-in flex flex-col justify-between">
               <div className="flex items-center gap-4">
-                <img
-                  src={`https://i.ytimg.com/vi/${song.videoId}/mqdefault.jpg`}
-                  alt=""
-                  className="w-32 h-[72px] rounded-lg object-cover bg-white/5 shrink-0"
-                  draggable={false}
+                <Thumb
+                  videoId={song.videoId}
+                  className="w-32 h-[72px] rounded-lg object-cover bg-white/5 shrink-0 block"
                 />
                 <div className="min-w-0 flex-1">
                   <h3 className="text-xl font-semibold leading-snug truncate">{song.title}</h3>
@@ -332,6 +344,12 @@ export function Player({ song }: Props): React.ReactElement {
                   {stemMeta.length} stems
                 </span>
               </div>
+
+              {hideVideo && decodeError && (
+                <div className="rounded-xl bg-rose-500/10 border border-rose-400/20 px-3 py-2 text-xs text-rose-200 break-words">
+                  {decodeError}
+                </div>
+              )}
 
               <div className="flex items-center gap-x-6 gap-y-2 flex-wrap">
                 {stemMeta.map((meta) => (
@@ -375,7 +393,15 @@ export function Player({ song }: Props): React.ReactElement {
           />
 
           <div className="mt-4 space-y-2">
-            {stemMeta.map((meta) => (
+            {decoding
+              ? [...Array(4)].map((_, i) => (
+                  <div
+                    key={i}
+                    className="glass rounded-xl h-16 animate-pulse"
+                    style={{ animationDelay: `${i * 120}ms` }}
+                  />
+                ))
+              : stemMeta.map((meta) => (
               <StemLane
                 key={meta.id}
                 meta={meta}
