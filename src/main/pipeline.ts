@@ -253,8 +253,9 @@ export async function startJob(
       // download has run (fresh setting, or a failed earlier attempt)
       if (useGpu) {
         if (
-          !(await ensureGpuEngine((pct) =>
-            progress(job, 'separate', 0, `Downloading GPU engine: ${pct}%`)
+          !(await ensureGpuEngine(
+            (pct) => progress(job, 'separate', 0, `Downloading GPU engine: ${pct}%`),
+            true
           ))
         ) {
           bail('Could not prepare the GPU engine — switch back to CPU in Settings and try again')
@@ -356,12 +357,9 @@ export async function startJob(
               '--device',
               deviceArg()
             ],
-            lineParsers((pct, msg) => {
-              if (!msg) return vocalsBase + Math.round((pct / 100) * (roformerSpan - vocalsBase))
-              // fallback path: roformer.py downloading the engine itself
-              const m = msg.match(/(\d+)%/)
-              return m ? Math.round((Number(m[1]) / 100) * downloadSpan) : pct
-            })
+            lineParsers((pct) =>
+              vocalsBase + Math.round((pct / 100) * (roformerSpan - vocalsBase))
+            )
           )
         }
         if (otherStems.length > 0) {

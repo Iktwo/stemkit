@@ -651,7 +651,10 @@ const GPU_TORCH_INDEX = 'https://download.pytorch.org/whl/cu121'
 let gpuEnginePromise: Promise<boolean> | null = null
 const gpuProgressListeners = new Set<(pct: number) => void>()
 
-export function ensureGpuEngine(onProgress?: (pct: number) => void): Promise<boolean> {
+export function ensureGpuEngine(
+  onProgress?: (pct: number) => void,
+  requireNvidia = false
+): Promise<boolean> {
   if (onProgress) gpuProgressListeners.add(onProgress)
   const detach = (): boolean => {
     if (onProgress) gpuProgressListeners.delete(onProgress)
@@ -665,6 +668,10 @@ export function ensureGpuEngine(onProgress?: (pct: number) => void): Promise<boo
     gpuEnginePromise = (async () => {
       // already swapped in: the venv's torch speaks CUDA, nothing to install
       if (await hasGpuAcceleration()) return true
+      // the Settings toggle is gated on NVIDIA detection, but a stale setting
+      // or a failed nvidia-smi probe could still land here — don't pull
+      // ~2.5GB of CUDA torch on a machine that can't use it
+      if (requireNvidia && !(await detectNvidiaGpu())) return false
       sendEnvEvent('Downloading the GPU engine (~2.5GB, one time)')
       await new Promise<void>((resolve, reject) => {
         const child = spawn(
@@ -922,7 +929,7 @@ export async function bootstrap(): Promise<boolean> {
     await refreshReady()
     sendEnvEvent('Engine ready', 'success')
     // no checkpoint prefetch here: the optional engines (~913MB vocals,
-    // ~170MB fine-tuned) download only when their settings toggles are on,
+    // ~320MB fine-tuned) download only when their settings toggles are on,
     // handled by the app-start prefetch in index.ts
     return true
   } catch (err) {

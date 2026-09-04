@@ -357,7 +357,7 @@ export function Settings({ settings, gpu, nvidiaGpu, onChange, onClose }: Props)
               <div className="min-w-0">
                 <p className="text-[13px] font-medium">Anonymous usage stats</p>
                 <p className="text-[11.5px] text-white/40 leading-relaxed mt-0.5">
-                  On by default. Helps improve StemKit with anonymous events (app version, OS,
+                  Helps improve StemKit with anonymous events (app version, OS,
                   actions). Song titles, links and audio never leave your machine.
                 </p>
               </div>
