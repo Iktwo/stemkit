@@ -673,6 +673,10 @@ export function ensureGpuEngine(onProgress?: (pct: number) => void): Promise<boo
             '-m',
             'pip',
             'install',
+            // required: the CPU torch from bootstrap already satisfies the
+            // version spec, so without -U pip would no-op and never swap in
+            // the cuda build
+            '-U',
             '--no-cache-dir',
             `torch==${GPU_TORCH_VERSION}`,
             `torchaudio==${GPU_TORCH_VERSION}`,
@@ -711,6 +715,17 @@ export function ensureGpuEngine(onProgress?: (pct: number) => void): Promise<boo
           )
         })
       })
+      // verify the swap actually took effect: torch must report a cuda build
+      // (torch.version.cuda is set by the wheel itself, independent of whether
+      // an NVIDIA driver/GPU is present on this machine)
+      const swapped = await runCapture(
+        venvPython(),
+        ['-c', 'import torch;print(1 if torch.version.cuda else 0)'],
+        30000
+      ).catch(() => '0')
+      if (!swapped.trim().startsWith('1')) {
+        throw new Error('cuda torch is not active after install (torch.version.cuda unset)')
+      }
       // refresh the cached cuda probe so Settings' status lines update
       gpuProbe = null
       gpuInfo = undefined
