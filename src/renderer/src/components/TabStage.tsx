@@ -273,6 +273,7 @@ export function TabStage({ song, instrument = 'guitar', onClose }: Props): React
   const tuningOptions = isBass ? BASS_TUNINGS : GUITAR_TUNINGS
   const Icon = isBass ? BassIcon : GuitarIcon
   const instLabel = isBass ? 'Bass' : 'Guitar'
+  const targetStem = instrument
 
   const {
     playing,
@@ -285,6 +286,7 @@ export function TabStage({ song, instrument = 'guitar', onClose }: Props): React
     vols,
     toggleStemSolo,
     toggleStemMute,
+    setStemMute,
     setStemVolume,
     rate,
     setRate,
@@ -293,6 +295,21 @@ export function TabStage({ song, instrument = 'guitar', onClose }: Props): React
     addSynthLane,
     buffers
   } = usePlayer()
+
+  const isMuted = mutes.has(targetStem)
+  const isMutedRef = useRef(isMuted)
+  isMutedRef.current = isMuted
+  const targetStemRef = useRef(targetStem)
+  targetStemRef.current = targetStem
+  const setStemMuteRef = useRef(setStemMute)
+  setStemMuteRef.current = setStemMute
+
+  const handleClose = useCallback((): void => {
+    if (isMutedRef.current) {
+      setStemMuteRef.current(targetStemRef.current, false)
+    }
+    onClose()
+  }, [onClose])
 
   const [tabs, setTabs] = useState<GuitarTabData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -351,6 +368,9 @@ export function TabStage({ song, instrument = 'guitar', onClose }: Props): React
       tabSynth.stopAllVoices()
       tabSynth.reset(0)
       tabSynth.enabled = false
+      if (isMutedRef.current) {
+        setStemMuteRef.current(targetStemRef.current, false)
+      }
     },
     []
   )
@@ -392,7 +412,7 @@ export function TabStage({ song, instrument = 'guitar', onClose }: Props): React
         e.preventDefault()
         if (importInfo) setImportInfo(null)
         else if (showSettings) setShowSettings(false)
-        else onClose()
+        else handleClose()
       } else if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
         e.preventDefault()
         const delta = (e.shiftKey ? 15 : 5) * (e.code === 'ArrowLeft' ? -1 : 1)
@@ -403,7 +423,7 @@ export function TabStage({ song, instrument = 'guitar', onClose }: Props): React
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [togglePlay, onClose, importInfo, showSettings, duration, getPosition, seekTo])
+  }, [togglePlay, handleClose, importInfo, showSettings, duration, getPosition, seekTo])
 
   // ---------- data ----------
   const applyTabsToSettings = useCallback(
@@ -582,9 +602,7 @@ export function TabStage({ song, instrument = 'guitar', onClose }: Props): React
   }
 
   // ---------- derived ----------
-  const targetStem = instrument
   const isSolo = solos.has(targetStem)
-  const isMuted = mutes.has(targetStem)
   const stemVolume = vols[targetStem] ?? 1
 
   const strings = useMemo(() => {
@@ -700,7 +718,7 @@ export function TabStage({ song, instrument = 'guitar', onClose }: Props): React
           <span>{instLabel} tab stage</span>
         </div>
         <button
-          onClick={onClose}
+          onClick={handleClose}
           className="no-drag flex items-center gap-1.5 px-3 py-1 rounded-lg glass hover:bg-white/10 text-white/70 hover:text-white text-xs transition-colors cursor-pointer"
           title="Back to the mixer (Esc)"
         >

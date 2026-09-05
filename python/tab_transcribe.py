@@ -148,6 +148,7 @@ def track_beats(mix_path, stem_path, duration, beats_per_bar=4):
     beats = np.array([], dtype=float)
     phase = 0
     label = "fixed"
+    mix_chords = []
 
     if source:
         try:
@@ -224,7 +225,7 @@ def track_beats(mix_path, stem_path, duration, beats_per_bar=4):
         beats = beats[beats > -1e-6]
         if len(head):
             phase = (phase) % beats_per_bar
-    return [round(float(b), 4) for b in beats], phase, round(bpm, 1), label
+    return [round(float(b), 4) for b in beats], phase, round(bpm, 1), label, mix_chords
 
 
 def build_measures(beats, phase, beats_per_bar, duration):
@@ -701,10 +702,50 @@ def transcribe_poly(path, y, sr, sensitivity, device, lowest_pitch, highest_pitc
         emit(type="info", message=f"Pitch anchoring skipped: {e}")
 
     progress(progress_base + 45, "Filtering harmonic ghost notes…")
-    notes = filter_harmonics(notes)
     notes = fix_octaves(notes, y, sr, lowest_pitch, highest_pitch)
+    notes = filter_harmonics(notes)
     notes = [n for n in notes if lowest_pitch <= n["pitch"] <= highest_pitch]
+    notes = [n for n in notes if (n["end"] - n["start"] >= 0.055 or n.get("amplitude", 0.5) >= 0.42)]
+    notes = cluster_strums(notes)
     return notes, "Basic Pitch (ONNX) + f0 anchoring"
+
+
+def cluster_strums(notes, max_strum_dur=0.045):
+    """
+    Cluster notes that are struck as part of the same chord strum.
+    Notes that begin within `max_strum_dur` of each other with distinct pitches
+    are grouped into a single simultaneous chord event aligned to the first note.
+    """
+    if not notes:
+        return []
+    notes = sorted(notes, key=lambda n: n["start"])
+    clusters = []
+    cur_cluster = [notes[0]]
+    for n in notes[1:]:
+        cluster_start = cur_cluster[0]["start"]
+        prev_start = cur_cluster[-1]["start"]
+        if (n["start"] - cluster_start <= max_strum_dur or n["start"] - prev_start <= 0.025) and \
+           all(c["pitch"] != n["pitch"] for c in cur_cluster):
+            cur_cluster.append(n)
+        else:
+            clusters.append(cur_cluster)
+            cur_cluster = [n]
+    clusters.append(cur_cluster)
+
+    out = []
+    for cl in clusters:
+        if len(cl) == 1:
+            out.append(dict(cl[0]))
+        else:
+            base_start = cl[0]["start"]
+            max_end = max(c["end"] for c in cl)
+            for c in cl:
+                item = dict(c)
+                item["start"] = base_start
+                item["end"] = max(c["end"], max_end - 0.05)
+                out.append(item)
+    out.sort(key=lambda n: (n["start"], n["pitch"]))
+    return out
 
 
 def filter_harmonics(notes):
@@ -803,8 +844,8 @@ def decode_chords(y, sr, beats, sensitivity):
 
     hop = 512
     y_h, _ = librosa.effects.hpss(y)
-    chroma = librosa.feature.chroma_cqt(y=y_h, sr=sr, hop_length=hop, bins_per_octave=24, n_octaves=4,
-                                        fmin=librosa.note_to_hz("C3"))
+    chroma = librosa.feature.chroma_cqt(y=y_h, sr=sr, hop_length=hop, bins_per_octave=24, n_octaves=5,
+                                        fmin=librosa.note_to_hz("C2"))
     beat_frames = librosa.time_to_frames(np.array(beats), sr=sr, hop_length=hop)
     beat_frames = np.clip(beat_frames, 0, chroma.shape[1] - 1)
     sync = librosa.util.sync(chroma, beat_frames, aggregate=np.median)
@@ -826,7 +867,7 @@ def decode_chords(y, sr, beats, sensitivity):
     prior = np.zeros(n_states)
     for i, nm in enumerate(names):
         _, q = split_chord_name(nm)
-        prior[i] = {"": 0.0, "m": 0.0, "7": -0.45, "maj7": -0.5, "m7": -0.45, "sus2": -0.8, "sus4": -0.8, "5": -1.0}[q]
+        prior[i] = {"": 0.0, "m": 0.0, "7": -0.55, "maj7": -1.2, "m7": -0.7, "sus2": -0.9, "sus4": -0.9, "5": -1.0}[q]
     beta = 14.0
     log_emis = beta * emis + prior[:, None]
     switch = 3.0 if sensitivity == "sensitive" else 4.2
@@ -1025,6 +1066,8 @@ def solve_fingering(notes, tuning_pitches, forced_position=None, max_fret=22, is
     Viterbi over time slices. State = one (string, fret) assignment per note in
     the slice. Cost = playability of the shape + how far the hand has to move
     from the previous shape (scaled by the time available to move).
+    Tracks persistent hand position across slices so open strings do not cause
+    abrupt teleportation to high frets.
     """
     if not notes:
         return []
@@ -1034,7 +1077,7 @@ def solve_fingering(notes, tuning_pitches, forced_position=None, max_fret=22, is
     slices = []
     cur = [notes[0]]
     for n in notes[1:]:
-        if n["start"] - cur[0]["start"] <= 0.03:
+        if n["start"] - cur[0]["start"] <= 0.035:
             cur.append(n)
         else:
             slices.append(cur)
@@ -1046,27 +1089,49 @@ def solve_fingering(notes, tuning_pitches, forced_position=None, max_fret=22, is
         fretted = [f for f in frets if f > 0]
         cost = 0.0
         for f in frets:
-            cost += f * (0.06 if not is_bass else 0.09)
-            if f > 12:
-                cost += (f - 12) * (0.25 if not is_bass else 0.4)
+            if is_bass:
+                if f <= 5:
+                    cost += f * 0.07
+                elif f <= 9:
+                    cost += 0.35 + (f - 5) * 0.2
+                else:
+                    cost += 1.15 + (f - 9) * 0.6
+            else:
+                if f <= 4:
+                    cost += f * 0.05
+                elif f <= 8:
+                    cost += 0.2 + (f - 4) * 0.12
+                elif f <= 12:
+                    cost += 0.68 + (f - 8) * 0.3
+                else:
+                    cost += 1.88 + (f - 12) * 0.7
         if fretted:
             span = max(fretted) - min(fretted)
-            cost += span * 1.4 if span <= 4 else 40.0
+            max_span = 3 if is_bass else 4
+            if span <= max_span:
+                cost += span * (1.6 if is_bass else 1.2)
+            else:
+                cost += 35.0 + (span - max_span) * 15.0
             if forced_position is not None:
-                lo, hi = forced_position, forced_position + 4
+                lo, hi = forced_position, forced_position + (3 if is_bass else 4)
                 for f in fretted:
                     if f < lo:
-                        cost += (lo - f) * 3.0
+                        cost += (lo - f) * 3.5
                     elif f > hi:
-                        cost += (f - hi) * 3.0
+                        cost += (f - hi) * 3.5
         elif forced_position is not None and forced_position > 2:
             cost += 0.8  # open strings are fine but slightly off-box
         strings = [s for s, _ in combo]
         if len(strings) != len(set(strings)):
             cost += 1e6
+        if len(combo) >= 3:
+            s_sorted = sorted(strings)
+            gap = (s_sorted[-1] - s_sorted[0] + 1) - len(combo)
+            if gap > 1:
+                cost += gap * 0.6
         return cost
 
-    def hand_pos(combo):
+    def slice_fret_pos(combo):
         fretted = [f for _, f in combo if f > 0]
         return min(fretted) if fretted else None
 
@@ -1091,7 +1156,7 @@ def solve_fingering(notes, tuning_pitches, forced_position=None, max_fret=22, is
                 combos.append((u, combo))
         if not combos:
             # unplayable chord: keep strongest notes that fit
-            order = sorted(range(len(sl)), key=lambda i: -sl[i]["amplitude"])
+            order = sorted(range(len(sl)), key=lambda i: -sl[i].get("amplitude", 0.5))
             chosen = []
             used = set()
             for i in order:
@@ -1107,13 +1172,18 @@ def solve_fingering(notes, tuning_pitches, forced_position=None, max_fret=22, is
         combos = combos[:48]
         slice_states.append((combos, sl))
 
-    # viterbi: keep every slice's cost vector so backtracking is a plain walk
+    # viterbi: track cost and effective hand position per state
     INF = float("inf")
     all_costs = []
     backptr = []
     prev_costs = None
     prev_combos = None
+    prev_hpositions = None
     prev_time = None
+    prev_sl = None
+
+    default_hpos = forced_position if forced_position is not None else 1
+
     for combos, sl in slice_states:
         if not combos:
             all_costs.append([])
@@ -1122,32 +1192,43 @@ def solve_fingering(notes, tuning_pitches, forced_position=None, max_fret=22, is
         t = sl[0]["start"]
         costs = []
         bp = []
+        cur_hpositions = []
         for u, combo in combos:
-            pos = hand_pos(combo)
+            fpos = slice_fret_pos(combo)
             if prev_costs is None:
-                costs.append(u + (pos or 0) * 0.02)
+                eff_pos = fpos if fpos is not None else default_hpos
+                costs.append(u + eff_pos * 0.02)
                 bp.append(-1)
+                cur_hpositions.append(eff_pos)
                 continue
             dt = max(0.0, t - prev_time)
-            move_w = 1.3 if dt < 0.2 else (0.8 if dt < 0.6 else (0.35 if dt < 1.5 else 0.12))
-            best, best_i = INF, -1
+            move_w = 1.4 if dt < 0.2 else (0.85 if dt < 0.6 else (0.35 if dt < 1.5 else 0.12))
+            best, best_i, best_hpos = INF, -1, default_hpos
             for i, (_, pcombo) in enumerate(prev_combos):
-                ppos = hand_pos(pcombo)
-                trans = 0.0
-                if pos is not None and ppos is not None:
-                    trans += abs(pos - ppos) * move_w
-                if len(combo) == 1 and len(pcombo) == 1 and dt < 0.35:
-                    trans += abs(combo[0][0] - pcombo[0][0]) * 0.18
-                    if combo[0][1] > 0 and pcombo[0][1] > 0 and combo[0][0] == pcombo[0][0]:
-                        trans -= 0.1
+                p_hpos = prev_hpositions[i]
+                hpos = fpos if fpos is not None else p_hpos
+                trans = abs(hpos - p_hpos) * move_w
+                if len(combo) == 1 and len(pcombo) == 1:
+                    s_cur, f_cur = combo[0]
+                    s_prev, f_prev = pcombo[0]
+                    s_diff = abs(s_cur - s_prev)
+                    if dt < 0.35:
+                        trans += s_diff * 0.18
+                        if s_diff > 2:
+                            trans += (s_diff - 2) * 0.7
+                        if s_diff == 0 and abs(f_cur - f_prev) <= 4:
+                            trans -= 0.15
+                    if dt < 0.45 and sl[0]["pitch"] == prev_sl[0]["pitch"] and (s_cur != s_prev or f_cur != f_prev):
+                        trans += 3.0
                 c = prev_costs[i] + trans
                 if c < best:
-                    best, best_i = c, i
+                    best, best_i, best_hpos = c, i, hpos
             costs.append(best + u)
             bp.append(best_i)
+            cur_hpositions.append(best_hpos)
         all_costs.append(costs)
         backptr.append(bp)
-        prev_costs, prev_combos, prev_time = costs, combos, t
+        prev_costs, prev_combos, prev_hpositions, prev_time, prev_sl = costs, combos, cur_hpositions, t, sl
 
     assigned = []
     choice = None
@@ -1175,7 +1256,7 @@ def ascii_tab(notes, measures, beats, string_names, chords=None, beats_per_bar=4
         return "\n".join(f"{name:2s}|---|" for name in string_names)
     n_strings = len(string_names)
     cols_per_beat = 4
-    col_w = 3
+    col_w = 2
     lines_out = []
     chords = chords or []
 
@@ -1192,25 +1273,35 @@ def ascii_tab(notes, measures, beats, string_names, chords=None, beats_per_bar=4
         chord_row = []
         for m in chunk:
             cols = beat_subdivisions(m["start"], m["end"], beats, cols_per_beat)
-            grid = {s: ["-" * col_w for _ in cols] for s in range(1, n_strings + 1)}
-            crow = [" " * col_w for _ in cols]
+            total_cols = len(cols)
+            grid = {s: ["-" * col_w for _ in range(total_cols)] for s in range(1, n_strings + 1)}
+            crow = list(" " * (total_cols * col_w))
             m_notes = [n for n in notes if m["start"] - 1e-6 <= n["start"] < m["end"] - 1e-6]
             for n in m_notes:
-                ci = min(range(len(cols)), key=lambda i: abs(cols[i] - n["start"]))
+                ci = min(range(total_cols), key=lambda i: abs(cols[i] - n["start"]))
                 s = n["string"]
                 if s not in grid:
                     continue
-                if grid[s][ci] != "-" * col_w and ci + 1 < len(cols) and grid[s][ci + 1] == "-" * col_w:
+                if grid[s][ci] != "-" * col_w and ci + 1 < total_cols and grid[s][ci + 1] == "-" * col_w:
                     ci += 1
                 art = n.get("articulation")
                 prefix = {"hammer": "h", "pull": "p", "slide": "/"}.get(art, "")
                 txt = f"{prefix}{n['fret']}"
-                grid[s][ci] = (txt + "-" * col_w)[:col_w]
+                if len(txt) == 1:
+                    cell = txt + "-"
+                elif len(txt) == 2:
+                    cell = txt
+                else:
+                    cell = txt[:col_w]
+                grid[s][ci] = cell
             last_chord = None
             for i, t in enumerate(cols):
                 c = chord_at(t) if chords else None
                 if c and c != last_chord:
-                    crow[i] = (c + " " * col_w)[:col_w] if len(c) <= col_w else c
+                    start_char = i * col_w
+                    for k, ch in enumerate(c):
+                        if start_char + k < len(crow):
+                            crow[start_char + k] = ch
                     last_chord = c
             mm = int(m["start"] // 60)
             ss = int(m["start"] % 60)
@@ -1218,7 +1309,7 @@ def ascii_tab(notes, measures, beats, string_names, chords=None, beats_per_bar=4
             for s in rows:
                 rows[s].append("".join(grid[s]))
             chord_row.append("".join(crow))
-        lines_out.append("   " + "   ".join(f"{h:<{len(chord_row[i])}}" for i, h in enumerate(header_cells)))
+        lines_out.append("   " + "   ".join(f"{h:<{len(rows[1][i])}}" for i, h in enumerate(header_cells)))
         if chords and any(c.strip() for c in chord_row):
             lines_out.append("   " + "|" + "|".join(chord_row) + "|")
         for s_idx, name in enumerate(string_names):
@@ -1434,7 +1525,7 @@ def main():
         tuning_pitches = prev.get("tuningPitches") or tuning_pitches
         midi_meta = {k: prev[k] for k in ("midiFile", "midiTrack", "midiOffset", "transpose") if k in prev}
         if not beats:
-            beats, phase, bpm, _ = track_beats(None, None, duration, beats_per_bar)
+            beats, phase, bpm, _, _ = track_beats(None, None, duration, beats_per_bar)
         measures = build_measures(beats, phase, beats_per_bar, duration)
         progress(60, "Rebuilding bars…")
     elif args.from_midi:
@@ -1446,7 +1537,7 @@ def main():
         if not duration:
             duration = max((n["end"] for n in notes), default=0.0) + 1.0
         if not beats or len(beats) < 4:
-            beats, phase, bpm, _ = track_beats(None, None, duration, beats_per_bar)
+            beats, phase, bpm, _, _ = track_beats(None, None, duration, beats_per_bar)
         if args.downbeat_phase is not None:
             phase = args.downbeat_phase % beats_per_bar
         bpm = round(bpm, 1)
@@ -1469,7 +1560,7 @@ def main():
             duration = len(y) / sr
 
         progress(6, "Tracking beats on the full mix…")
-        beats, phase, bpm, grid_source = track_beats(args.mix, args.input, duration, beats_per_bar)
+        beats, phase, bpm, grid_source, mix_chords = track_beats(args.mix, args.input, duration, beats_per_bar)
         if args.downbeat_phase is not None:
             phase = args.downbeat_phase % beats_per_bar
         measures = build_measures(beats, phase, beats_per_bar, duration)
@@ -1484,10 +1575,14 @@ def main():
             raw = [n for n in raw if lowest <= n["pitch"] <= highest]
             progress(70, f"Solving fingerings for {len(raw)} notes…")
             assigned = solve_fingering(raw, tuning_pitches, forced_pos, max_fret, is_bass)
+            if not chords and mix_chords:
+                chords = mix_chords
         else:
             raw, engine = transcribe_poly(args.input, y, sr, sensitivity, args.device, lowest, highest, progress_base=12)
             progress(72, f"Solving fingerings for {len(raw)} notes…")
             assigned = solve_fingering(raw, tuning_pitches, forced_pos, max_fret, is_bass)
+            if not chords and mix_chords:
+                chords = mix_chords
         engine = f"{engine} · beat grid from {grid_source}"
 
     progress(88, "Rendering tablature…")

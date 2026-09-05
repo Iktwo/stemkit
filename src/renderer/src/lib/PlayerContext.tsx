@@ -294,6 +294,11 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
           mutes: new Set(nextMutes),
           solos: new Set(solosRef.current)
         }
+      } else if (customMixRef.current) {
+        customMixRef.current.mutes.delete(id)
+        if (customMixRef.current.mutes.size === 0 && customMixRef.current.solos.size === 0) {
+          customMixRef.current = null
+        }
       }
       return nextMutes
     })
@@ -313,6 +318,11 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
         customMixRef.current = {
           mutes: new Set(nextMutes),
           solos: new Set(solosRef.current)
+        }
+      } else if (customMixRef.current) {
+        customMixRef.current.mutes.delete(id)
+        if (customMixRef.current.mutes.size === 0 && customMixRef.current.solos.size === 0) {
+          customMixRef.current = null
         }
       }
       return nextMutes
@@ -447,7 +457,15 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
             solosRef.current = activeSolos
             setSolos(activeSolos)
           }
-          engine.applyMix(newVols, mutesRef.current, activeSolos, masterRef.current)
+          let activeMutes = mutesRef.current
+          if (stemKeys.length > 0 && stemKeys.every((id) => activeMutes.has(id))) {
+            activeMutes = new Set<StemId>()
+            mutesRef.current = activeMutes
+            setMutes(activeMutes)
+            presetRef.current = 'all'
+            setPreset('all')
+          }
+          engine.applyMix(newVols, activeMutes, activeSolos, masterRef.current)
         }
 
         if (autoPlay && !playingRef.current) {
@@ -503,7 +521,15 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
             solosRef.current = activeSolos
             setSolos(activeSolos)
           }
-          engine.applyMix(newVols, mutesRef.current, activeSolos, masterRef.current)
+          let activeMutes = mutesRef.current
+          if (stemKeys.length > 0 && stemKeys.every((id) => activeMutes.has(id))) {
+            activeMutes = new Set<StemId>()
+            mutesRef.current = activeMutes
+            setMutes(activeMutes)
+            presetRef.current = 'all'
+            setPreset('all')
+          }
+          engine.applyMix(newVols, activeMutes, activeSolos, masterRef.current)
         }
 
         if (autoPlay && !playingRef.current) {
