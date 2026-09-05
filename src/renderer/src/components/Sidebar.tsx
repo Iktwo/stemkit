@@ -6,6 +6,8 @@ import { TrashIcon, PlusIcon } from './Icons'
 interface Props {
   songs: Song[]
   activeId: string | null
+  playingId?: string | null
+  isPlaying?: boolean
   pending?: Record<string, { label: string; error?: boolean }>
   update?: { status: string; version?: string; pct?: number }
   appVersion?: string
@@ -18,6 +20,8 @@ interface Props {
 export function Sidebar({
   songs,
   activeId,
+  playingId,
+  isPlaying,
   pending = {},
   update,
   appVersion,
@@ -90,6 +94,7 @@ export function Sidebar({
 
         {filteredSongs.map((song) => {
           const active = song.videoId === activeId
+          const isCurrentlyPlaying = song.videoId === playingId
           const pendingInfo = pending[song.videoId]
           const working = !!pendingInfo && !pendingInfo.error
           const failed = !!pendingInfo?.error
@@ -118,6 +123,13 @@ export function Sidebar({
                     <span className="w-3.5 h-3.5 rounded-full border-2 border-olive-300/40 border-t-olive-300 animate-spin" />
                   </span>
                 )}
+                {!working && isCurrentlyPlaying && isPlaying && (
+                  <span className="absolute inset-0 bg-black/50 rounded-md flex items-center justify-center gap-0.5">
+                    <span className="w-0.5 h-2.5 bg-olive-400 rounded-full animate-pulse" />
+                    <span className="w-0.5 h-3.5 bg-emerald-400 rounded-full animate-pulse [animation-delay:150ms]" />
+                    <span className="w-0.5 h-2 bg-olive-400 rounded-full animate-pulse [animation-delay:300ms]" />
+                  </span>
+                )}
               </div>
 
               <div className="min-w-0 flex-1">
@@ -139,9 +151,19 @@ export function Sidebar({
                         {fmtTime(song.duration)}
                       </span>
                       <span className="text-white/20 text-[10px]">·</span>
-                      <span className="text-[9px] px-1.5 py-0.2 rounded font-semibold uppercase bg-olive-500/20 text-olive-300">
-                        {song.stems?.length ? `${song.stems.length} stems` : 'SOTA'}
-                      </span>
+                      {isCurrentlyPlaying ? (
+                        <span className={`text-[9px] px-1.5 py-0.2 rounded font-semibold uppercase ${
+                          isPlaying
+                            ? 'bg-olive-400 text-black shadow-xs'
+                            : 'bg-white/10 text-white/70'
+                        }`}>
+                          {isPlaying ? 'Playing' : 'Paused'}
+                        </span>
+                      ) : (
+                        <span className="text-[9px] px-1.5 py-0.2 rounded font-semibold uppercase bg-olive-500/20 text-olive-300">
+                          {song.stems?.length ? `${song.stems.length} stems` : 'SOTA'}
+                        </span>
+                      )}
                     </>
                   )}
                 </div>

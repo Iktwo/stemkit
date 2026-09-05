@@ -1,39 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MODEL_EXTENDED, type Song, type StemId } from '../../../shared/types'
-import { engine, decodePayload, type BufferMap } from '../lib/engine'
+import { usePlayer, clearBufferCache } from '../lib/PlayerContext'
 import { buildStemMeta, STEM_INFO, PREFERRED_ORDER } from '../lib/stems'
 import { fmtTime } from '../lib/format'
 import { YouTubeHost } from '../lib/youtube'
 import { StemLane } from './StemLane'
-import { Transport, type PresetId } from './Transport'
+import { Transport } from './Transport'
 import { DownloadIcon, RefreshIcon, XIcon } from './Icons'
 
-type BufferCacheMap = BufferMap
-
-const bufferCache = new Map<string, Promise<BufferCacheMap>>()
-
-export function clearBufferCache(videoId?: string): void {
-  if (videoId) {
-    bufferCache.delete(videoId)
-  } else {
-    bufferCache.clear()
-  }
-}
-
-function getDecoded(videoId: string): Promise<BufferCacheMap> {
-  let entry = bufferCache.get(videoId)
-  if (!entry) {
-    entry = window.stemkit
-      .getBuffers(videoId)
-      .then((payload) => decodePayload(payload))
-      .catch((err) => {
-        bufferCache.delete(videoId)
-        throw err
-      })
-    bufferCache.set(videoId, entry)
-  }
-  return entry
-}
+export { clearBufferCache }
 
 interface Props {
   song: Song
@@ -43,25 +18,42 @@ interface Props {
 export function Player({ song, onReprocess }: Props): React.ReactElement {
   const containerRef = useRef<HTMLDivElement>(null)
   const hostRef = useRef<YouTubeHost | null>(null)
-  const posRef = useRef(0)
-  const playingRef = useRef(false)
+  const ytReadyRef = useRef(false)
   const videoSyncAtRef = useRef(0)
 
   const VIDEO_DRIFT_LIMIT = 0.4
   const VIDEO_RESYNC_COOLDOWN = 2000
 
   const [ytReady, setYtReady] = useState(false)
-  const [decoding, setDecoding] = useState(true)
-  const [decodeError, setDecodeError] = useState<string | null>(null)
-  const [playing, setPlaying] = useState(false)
-  const [duration, setDuration] = useState(song.duration || 0)
-  const [buffers, setBuffers] = useState<BufferMap>({})
 
-  const [vols, setVols] = useState<Partial<Record<StemId, number>>>({})
-  const [mutes, setMutes] = useState<Set<StemId>>(new Set())
-  const [solos, setSolos] = useState<Set<StemId>>(new Set())
-  const [master, setMaster] = useState(0.9)
-  const [preset, setPreset] = useState<PresetId | 'custom'>('all')
+  const {
+    playing,
+    duration,
+    decoding,
+    decodeError,
+    buffers,
+    vols,
+    mutes,
+    solos,
+    master,
+    preset,
+    getPosition,
+    loadSong,
+    togglePlay,
+    seekTo,
+    setStemVolume,
+    toggleStemMute,
+    toggleStemSolo,
+    setMasterVolume,
+    applyPreset,
+    stopAndClose,
+    registerHost
+  } = usePlayer()
+
+  const playingRef = useRef(playing)
+  useEffect(() => {
+    playingRef.current = playing
+  }, [playing])
 
   // Reprocess modal state
   const [showReprocess, setShowReprocess] = useState(false)
@@ -78,49 +70,12 @@ export function Player({ song, onReprocess }: Props): React.ReactElement {
     year: 'numeric'
   })
 
+  // Load song if not already loaded
   useEffect(() => {
-    posRef.current = 0
-    setPlaying(false)
-    playingRef.current = false
-    videoSyncAtRef.current = 0
-    setYtReady(false)
-    setDecodeError(null)
-    setBuffers({})
-    setDuration(song.duration || 0)
-    setVols({})
-    setMutes(new Set())
-    setSolos(new Set())
-    setPreset('all')
-    setShowReprocess(false)
-    setReprocessStems(new Set<StemId>((song.stems as StemId[]) || (PREFERRED_ORDER as StemId[])))
-    engine.stopAll()
+    void loadSong(song)
+  }, [song.videoId, song.model, loadSong])
 
-    let cancelled = false
-    setDecoding(true)
-    getDecoded(song.videoId)
-      .then((decoded) => {
-        if (cancelled) return
-        setBuffers(decoded)
-        engine.setBuffers(decoded)
-        setVols(Object.fromEntries(Object.keys(decoded).map((id) => [id, 1])))
-        const d = engine.trackDuration()
-        if (d > 0) setDuration(d)
-        setDecoding(false)
-      })
-      .catch((err) => {
-        if (cancelled) return
-        setDecoding(false)
-        setDecodeError(err instanceof Error ? err.message : String(err))
-      })
-
-    return () => {
-      cancelled = true
-      engine.stopAll()
-      hostRef.current?.destroy()
-      hostRef.current = null
-    }
-  }, [song.videoId, song.model])
-
+  // Mount YouTube Host for visual sync
   useEffect(() => {
     if (!containerRef.current) return
     const host = new YouTubeHost()
@@ -130,48 +85,65 @@ export function Player({ song, onReprocess }: Props): React.ReactElement {
         if (cancelled) return
         if (st === 'playing') {
           if (!playingRef.current) {
-            playingRef.current = true
-            setPlaying(true)
-            const t = host.time()
-            posRef.current = t
-            engine.setPlaying(true, t)
+            togglePlay()
           }
-        } else if (st === 'paused' || st === 'ended') {
+        } else if (st === 'paused') {
+          if (playingRef.current && ytReadyRef.current) {
+            togglePlay()
+          }
+        } else if (st === 'ended') {
           if (playingRef.current) {
-            playingRef.current = false
-            setPlaying(false)
-            posRef.current = engine.expected()
-            engine.setPlaying(false, posRef.current)
+            togglePlay()
           }
         }
       })
       .then(() => {
         if (cancelled) return
         setYtReady(true)
+        ytReadyRef.current = true
+        hostRef.current = host
+        registerHost(host)
+        const curTime = getPosition()
+        host.seek(curTime)
+        if (playingRef.current) {
+          host.play()
+        }
+        videoSyncAtRef.current = performance.now()
       })
-    hostRef.current = host
+
     return () => {
       cancelled = true
+      ytReadyRef.current = false
+      setYtReady(false)
+      registerHost(null)
       host.destroy()
       hostRef.current = null
     }
-  }, [song.videoId])
+  }, [song.videoId, registerHost, togglePlay, getPosition])
 
+  // Sync YouTube player when playing state changes
   useEffect(() => {
-    engine.applyMix(vols, mutes, solos, master)
-  }, [vols, mutes, solos, master])
+    if (!hostRef.current || !ytReady) return
+    if (playing) {
+      hostRef.current.seek(getPosition())
+      hostRef.current.play()
+      videoSyncAtRef.current = performance.now()
+    } else {
+      hostRef.current.pause()
+    }
+  }, [playing, ytReady, getPosition])
 
+  // Drift correction loop
   useEffect(() => {
-    if (!playing) return
+    if (!playing || !ytReady) return
     let animId: number
     const checkSync = (): void => {
       const now = performance.now()
       if (
         hostRef.current &&
-        ytReady &&
         now - videoSyncAtRef.current > VIDEO_RESYNC_COOLDOWN
       ) {
-        const audioPos = engine.expected()
+        const audioPos = getPosition()
         const videoPos = hostRef.current.time()
         const drift = Math.abs(audioPos - videoPos)
         if (drift > VIDEO_DRIFT_LIMIT) {
@@ -183,81 +155,7 @@ export function Player({ song, onReprocess }: Props): React.ReactElement {
     }
     animId = requestAnimationFrame(checkSync)
     return () => cancelAnimationFrame(animId)
-  }, [playing, ytReady])
-
-  const getPosition = useCallback((): number => {
-    if (playingRef.current) return engine.expected()
-    return posRef.current
-  }, [])
-
-  const seekTo = useCallback(
-    (t: number): void => {
-      posRef.current = t
-      engine.align(t)
-      hostRef.current?.seek(t)
-      videoSyncAtRef.current = performance.now()
-    },
-    []
-  )
-
-  const togglePlay = useCallback((): void => {
-    const next = !playingRef.current
-    playingRef.current = next
-    setPlaying(next)
-    if (next) {
-      const t = posRef.current
-      engine.setPlaying(true, t)
-      hostRef.current?.seek(t)
-      hostRef.current?.play()
-      videoSyncAtRef.current = performance.now()
-    } else {
-      posRef.current = engine.expected()
-      engine.setPlaying(false, posRef.current)
-      hostRef.current?.pause()
-    }
-  }, [])
-
-  const toggleMute = useCallback((id: StemId): void => {
-    setMutes((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-    setPreset('custom')
-  }, [])
-
-  const toggleSolo = useCallback((id: StemId): void => {
-    setSolos((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-    setPreset('custom')
-  }, [])
-
-  const applyPreset = useCallback(
-    (p: PresetId): void => {
-      setPreset(p)
-      const available = Object.keys(buffers) as StemId[]
-      const nextMutes = new Set<StemId>()
-      const nextSolos = new Set<StemId>()
-      if (p === 'all') {
-        // all unmuted
-      } else if (p === 'karaoke') {
-        if (available.includes('vocals')) nextMutes.add('vocals')
-      } else if (p === 'acapella') {
-        if (available.includes('vocals')) nextSolos.add('vocals')
-      } else if (p === 'drumnbass') {
-        if (available.includes('drums')) nextSolos.add('drums')
-        if (available.includes('bass')) nextSolos.add('bass')
-      }
-      setMutes(nextMutes)
-      setSolos(nextSolos)
-    },
-    [buffers]
-  )
+  }, [playing, ytReady, getPosition])
 
   const exportStem = useCallback(
     async (id: StemId): Promise<void> => {
@@ -294,6 +192,7 @@ export function Player({ song, onReprocess }: Props): React.ReactElement {
     if (reprocessStems.size === 0) return
     const ordered = PREFERRED_ORDER.filter((id) => reprocessStems.has(id))
     clearBufferCache(song.videoId)
+    stopAndClose()
     setShowReprocess(false)
     onReprocess?.(song.videoId, MODEL_EXTENDED, ordered)
   }
@@ -385,7 +284,7 @@ export function Player({ song, onReprocess }: Props): React.ReactElement {
             preset={preset === 'custom' ? 'all' : preset}
             onPreset={applyPreset}
             master={master}
-            onMaster={setMaster}
+            onMaster={setMasterVolume}
             youtubeUrl={youtubeUrl}
           />
 
@@ -401,9 +300,9 @@ export function Player({ song, onReprocess }: Props): React.ReactElement {
                 volume={vols[meta.id] ?? 1}
                 muted={mutes.has(meta.id)}
                 soloed={solos.has(meta.id)}
-                onToggleMute={() => toggleMute(meta.id)}
-                onToggleSolo={() => toggleSolo(meta.id)}
-                onVolume={(v) => setVols((prev) => ({ ...prev, [meta.id]: v }))}
+                onToggleMute={() => toggleStemMute(meta.id)}
+                onToggleSolo={() => toggleStemSolo(meta.id)}
+                onVolume={(v) => setStemVolume(meta.id, v)}
                 onSeek={seekTo}
                 onExport={() => exportStem(meta.id)}
               />

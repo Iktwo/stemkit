@@ -65,6 +65,10 @@ export class StemEngine {
     return Object.keys(this.buffers).length > 0
   }
 
+  isPlaying(): boolean {
+    return this.playing
+  }
+
   setPlaying(playing: boolean, time: number): void {
     if (playing) this.resume()
     this.playing = playing
