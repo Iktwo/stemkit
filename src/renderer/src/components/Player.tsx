@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { MODEL_EXTENDED, type Song, type StemId } from '../../../shared/types'
 import { usePlayer, clearBufferCache } from '../lib/PlayerContext'
 import { buildStemMeta, STEM_INFO, PREFERRED_ORDER } from '../lib/stems'
 import { fmtTime } from '../lib/format'
-import { YouTubeHost } from '../lib/youtube'
 import { StemLane } from './StemLane'
 import { Transport } from './Transport'
 import { DownloadIcon, RefreshIcon, XIcon } from './Icons'
@@ -16,16 +15,6 @@ interface Props {
 }
 
 export function Player({ song, onReprocess }: Props): React.ReactElement {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const hostRef = useRef<YouTubeHost | null>(null)
-  const ytReadyRef = useRef(false)
-  const videoSyncAtRef = useRef(0)
-
-  const VIDEO_DRIFT_LIMIT = 0.4
-  const VIDEO_RESYNC_COOLDOWN = 2000
-
-  const [ytReady, setYtReady] = useState(false)
-
   const {
     playing,
     duration,
@@ -46,14 +35,8 @@ export function Player({ song, onReprocess }: Props): React.ReactElement {
     toggleStemSolo,
     setMasterVolume,
     applyPreset,
-    stopAndClose,
-    registerHost
+    stopAndClose
   } = usePlayer()
-
-  const playingRef = useRef(playing)
-  useEffect(() => {
-    playingRef.current = playing
-  }, [playing])
 
   // Reprocess modal state
   const [showReprocess, setShowReprocess] = useState(false)
@@ -63,7 +46,6 @@ export function Player({ song, onReprocess }: Props): React.ReactElement {
 
   const stemMeta = useMemo(() => buildStemMeta(Object.keys(buffers) as StemId[]), [buffers])
 
-  const youtubeUrl = `https://www.youtube.com/watch?v=${song.videoId}`
   const addedLabel = new Date(song.addedAt).toLocaleDateString(undefined, {
     month: 'short',
     day: 'numeric',
@@ -74,88 +56,6 @@ export function Player({ song, onReprocess }: Props): React.ReactElement {
   useEffect(() => {
     void loadSong(song)
   }, [song.videoId, song.model, loadSong])
-
-  // Mount YouTube Host for visual sync
-  useEffect(() => {
-    if (!containerRef.current) return
-    const host = new YouTubeHost()
-    let cancelled = false
-    void host
-      .mount(containerRef.current, song.videoId, (st) => {
-        if (cancelled) return
-        if (st === 'playing') {
-          if (!playingRef.current) {
-            togglePlay()
-          }
-        } else if (st === 'paused') {
-          if (playingRef.current && ytReadyRef.current) {
-            togglePlay()
-          }
-        } else if (st === 'ended') {
-          if (playingRef.current) {
-            togglePlay()
-          }
-        }
-      })
-      .then(() => {
-        if (cancelled) return
-        setYtReady(true)
-        ytReadyRef.current = true
-        hostRef.current = host
-        registerHost(host)
-        const curTime = getPosition()
-        host.seek(curTime)
-        if (playingRef.current) {
-          host.play()
-        }
-        videoSyncAtRef.current = performance.now()
-      })
-
-    return () => {
-      cancelled = true
-      ytReadyRef.current = false
-      setYtReady(false)
-      registerHost(null)
-      host.destroy()
-      hostRef.current = null
-    }
-  }, [song.videoId, registerHost, togglePlay, getPosition])
-
-  // Sync YouTube player when playing state changes
-  useEffect(() => {
-    if (!hostRef.current || !ytReady) return
-    if (playing) {
-      hostRef.current.seek(getPosition())
-      hostRef.current.play()
-      videoSyncAtRef.current = performance.now()
-    } else {
-      hostRef.current.pause()
-    }
-  }, [playing, ytReady, getPosition])
-
-  // Drift correction loop
-  useEffect(() => {
-    if (!playing || !ytReady) return
-    let animId: number
-    const checkSync = (): void => {
-      const now = performance.now()
-      if (
-        hostRef.current &&
-        now - videoSyncAtRef.current > VIDEO_RESYNC_COOLDOWN
-      ) {
-        const audioPos = getPosition()
-        const videoPos = hostRef.current.time()
-        const drift = Math.abs(audioPos - videoPos)
-        if (drift > VIDEO_DRIFT_LIMIT) {
-          hostRef.current.seek(audioPos)
-          videoSyncAtRef.current = now
-        }
-      }
-      animId = requestAnimationFrame(checkSync)
-    }
-    animId = requestAnimationFrame(checkSync)
-    return () => cancelAnimationFrame(animId)
-  }, [playing, ytReady, getPosition])
 
   const exportStem = useCallback(
     async (id: StemId): Promise<void> => {
@@ -201,79 +101,63 @@ export function Player({ song, onReprocess }: Props): React.ReactElement {
     <div className="h-full flex flex-col overflow-hidden bg-gradient-to-b from-[#11130d] to-[#0a0c08]">
       <div className="flex-1 overflow-y-auto px-8 py-6">
         <div className="max-w-5xl mx-auto space-y-4">
-          <div className="flex gap-4">
-            <div className="w-[320px] shrink-0 glass rounded-2xl p-2.5 rise-in flex flex-col">
-              <div className="relative w-full aspect-video rounded-xl overflow-hidden bg-black/60 shadow-inner">
-                <div ref={containerRef} className="absolute inset-0 [&_iframe]:w-full [&_iframe]:h-full" />
-                {!ytReady && (
-                  <div className="absolute inset-0 flex items-center justify-center animate-pulse">
-                    <span className="text-[10px] text-white/40 tracking-widest uppercase">loading…</span>
-                  </div>
-                )}
-                {decodeError && (
-                  <div className="absolute inset-x-3 bottom-3 flex justify-center rise-in">
-                    <div className="glass rounded-lg px-3 py-1.5 text-xs text-rose-300 break-words">
-                      {decodeError}
-                    </div>
-                  </div>
-                )}
+          <div className="glass rounded-2xl p-6 rise-in flex flex-col md:flex-row gap-6 items-start md:items-center justify-between">
+            <div className="flex items-center gap-5 min-w-0 flex-1">
+              <img
+                src={`https://i.ytimg.com/vi/${song.videoId}/mqdefault.jpg`}
+                alt=""
+                className="w-36 h-24 rounded-xl object-cover bg-white/5 shadow-md shrink-0 ring-1 ring-white/10"
+                draggable={false}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 mb-1 flex-wrap">
+                  <span className="text-xs px-2.5 py-0.5 rounded-full bg-olive-500/20 text-olive-300 font-semibold uppercase tracking-wider">
+                    {stemMeta.length} Stems
+                  </span>
+                  <span className="text-xs text-white/40 font-mono">
+                    BS-RoFormer (SOTA)
+                  </span>
+                </div>
+                <h2 className="text-2xl font-bold leading-snug truncate text-white">{song.title}</h2>
+                <p className="text-xs text-white/45 mt-1 font-mono truncate">
+                  {fmtTime(duration || song.duration)} · added {addedLabel}
+                </p>
+                <div className="flex items-center gap-x-5 gap-y-1.5 flex-wrap mt-3">
+                  {stemMeta.map((meta) => (
+                    <span key={meta.id} className="flex items-center gap-1.5 text-xs text-white/70">
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: meta.color }} />
+                      <span className="capitalize">{meta.label}</span>
+                    </span>
+                  ))}
+                </div>
               </div>
             </div>
 
-            <aside className="flex-1 min-w-0 glass rounded-2xl px-6 py-5 rise-in flex flex-col justify-between">
-              <div className="flex items-center gap-4">
-                <img
-                  src={`https://i.ytimg.com/vi/${song.videoId}/mqdefault.jpg`}
-                  alt=""
-                  className="w-32 h-[72px] rounded-lg object-cover bg-white/5 shrink-0"
-                  draggable={false}
-                />
-                <div className="min-w-0 flex-1">
-                  <h3 className="text-xl font-semibold leading-snug truncate">{song.title}</h3>
-                  <p className="text-xs text-white/45 mt-1.5 font-mono truncate">
-                    {fmtTime(song.duration)} · added {addedLabel} · BS-RoFormer (SOTA)
-                  </p>
-                </div>
-                <span className="shrink-0 text-xs px-3 py-1.5 rounded-full bg-white/5 text-white/50 font-medium">
-                  {stemMeta.length} stems
-                </span>
-              </div>
-
-              <div className="flex items-center gap-x-6 gap-y-2 flex-wrap my-3">
-                {stemMeta.map((meta) => (
-                  <span key={meta.id} className="flex items-center gap-2 text-[14px] text-white/75">
-                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: meta.color }} />
-                    <span className="capitalize">{meta.label}</span>
-                  </span>
-                ))}
-              </div>
-
-              <div className="flex items-center gap-2.5 flex-wrap">
-                <button
-                  onClick={() => setShowReprocess(true)}
-                  className="no-drag glass rounded-xl px-4 py-2.5 text-[13px] font-medium text-olive-200 hover:text-white hover:bg-olive-500/20 border border-olive-400/30 transition-all flex items-center gap-2"
-                  title="Reprocess this track with SOTA BS-RoFormer or new stems"
-                >
-                  <RefreshIcon className="w-3.5 h-3.5" />
-                  Reprocess Stems
-                </button>
-                <button
-                  onClick={exportAllStems}
-                  disabled={decoding || !!decodeError}
-                  className="no-drag glass rounded-xl px-4 py-2.5 text-[13px] font-medium text-white/70 hover:text-white hover:bg-white/10 transition-colors flex items-center gap-2 disabled:opacity-40"
-                >
-                  <DownloadIcon className="w-4 h-4" />
-                  Export everything
-                </button>
-                <button
-                  onClick={() => window.stemkit.openExternal(youtubeUrl)}
-                  className="no-drag glass rounded-xl px-4 py-2.5 text-[13px] font-medium text-white/70 hover:text-white hover:bg-white/10 transition-colors"
-                >
-                  Open on YouTube
-                </button>
-              </div>
-            </aside>
+            <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
+              <button
+                onClick={() => setShowReprocess(true)}
+                className="no-drag glass rounded-xl px-4 py-2.5 text-[13px] font-medium text-olive-200 hover:text-white hover:bg-olive-500/20 border border-olive-400/30 transition-all flex items-center gap-2"
+                title="Reprocess this track with SOTA BS-RoFormer or new stems"
+              >
+                <RefreshIcon className="w-3.5 h-3.5" />
+                Reprocess Stems
+              </button>
+              <button
+                onClick={exportAllStems}
+                disabled={decoding || !!decodeError}
+                className="no-drag glass rounded-xl px-4 py-2.5 text-[13px] font-medium text-white/70 hover:text-white hover:bg-white/10 transition-colors flex items-center gap-2 disabled:opacity-40"
+              >
+                <DownloadIcon className="w-4 h-4" />
+                Export everything
+              </button>
+            </div>
           </div>
+
+          {decodeError && (
+            <div className="glass rounded-xl px-4 py-3 text-xs text-rose-300 border border-rose-500/20 flex items-center gap-2 rise-in">
+              <span>Failed to decode stems: {decodeError}</span>
+            </div>
+          )}
 
           <Transport
             playing={playing}
@@ -285,7 +169,6 @@ export function Player({ song, onReprocess }: Props): React.ReactElement {
             onPreset={applyPreset}
             master={master}
             onMaster={setMasterVolume}
-            youtubeUrl={youtubeUrl}
           />
 
           <div className="mt-4 space-y-2">

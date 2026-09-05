@@ -1,22 +1,26 @@
 # StemKit
 
+> [!NOTE]
+> **Credits & Acknowledgement**: StemKit was created and designed by **[Daniel Ravina](https://github.com/danielravina)** in the original [danielravina/stemkit](https://github.com/danielravina/stemkit) repository. All credit for the foundational architecture and concept belongs to him! This fork contains personal enhancements and community improvements built on top of his work (such as SOTA BS-RoFormer stem separation, continuous background playback with a mini player, audio-focused playback that ditches YouTube video streaming once fetched, and UI polish).
+
 Split any YouTube song into isolated stems — **vocals, drums, bass, guitar, piano** and more — right on your machine.
 
-Search YouTube or paste a link, pick the instruments you want, and play the result like a mini DAW: the video on one side, every stem on its own fader, all perfectly in sync. Karaoke, acapellas and instrumentals are one click away.
+Search YouTube or paste a link, pick the instruments you want, and play the result like a multitrack DAW: every stem on its own fader, all perfectly in sync. Karaoke, acapellas and instrumentals are one click away. Once a track is fetched, YouTube is ditched entirely for pure, lightweight local audio playback.
 
 Everything runs locally — no accounts, no cloud, no API keys.
 
 ![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-black) ![local](https://img.shields.io/badge/100%25-local-emerald)
 
 <p align="center">
-  <img src="docs/stemkit.png" alt="StemKit splitting Queen's Bohemian Rhapsody into six stems — video player, presets and color-coded waveform lanes" width="100%" />
+  <img src="docs/stemkit.png" alt="StemKit splitting Queen's Bohemian Rhapsody into six stems — player, presets and color-coded waveform lanes" width="100%" />
 </p>
 
 ## Features
 
 - Built-in YouTube search, or paste a link
 - Choose your instruments individually; the right separation engine is picked for you
-- Tight audio/video sync with instant, artifact-free seeking
+- Pure local audio playback — once fetched, no YouTube video streaming or overhead
+- Persistent mini player for seamless listening while browsing or fetching new tracks
 - One-click presets: **All · Karaoke · Acapella · Drums + Bass**
 - Per-stem mute/solo/volume, waveforms with click-to-seek
 - Parallel background splitting with live progress
@@ -85,7 +89,7 @@ Without these secrets CI falls back to ad-hoc signing (app runs, but Gatekeeper 
 YouTube URL ──► yt-dlp (+JS runtime) ──► bundled ffmpeg ──► BS-RoFormer / Demucs FT ──► stems/*.wav
                                         │
 Electron renderer ◄──── IPC events ─────┘
-video iframe (muted) + Web Audio stem playback · master clock = the audio itself
+Local Web Audio API stem playback · per-stem volume / solo / mute faders
 ```
 
 ## Notes
@@ -98,8 +102,13 @@ video iframe (muted) + Web Audio stem playback · master clock = the audio itsel
 ```
 src/main         Electron main process (pipeline, env bootstrap, library)
 src/preload      IPC bridge
-src/renderer     React UI (player, sync engine, waveforms)
+src/renderer     React UI (player, waveforms, mini player, audio engine)
 python/          separate.py — demucs wrapper with JSON progress output
 scripts/         node runner, ffmpeg fetchers
 build/           icon sources
 ```
+
+## Credits
+
+Massive gratitude to **[Daniel Ravina](https://github.com/danielravina)**, creator of the original [StemKit](https://github.com/danielravina/stemkit). If you enjoy this project, make sure to check out and star the [original upstream repository](https://github.com/danielravina/stemkit)!
+

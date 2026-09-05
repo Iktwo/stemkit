@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { fmtTime } from '../lib/format'
-import { PlayIcon, PauseIcon, ExternalIcon } from './Icons'
+import { PlayIcon, PauseIcon } from './Icons'
 
 export type PresetId = 'all' | 'karaoke' | 'acapella' | 'drumnbass'
 
@@ -21,7 +21,6 @@ interface Props {
   onPreset: (p: PresetId) => void
   master: number
   onMaster: (v: number) => void
-  youtubeUrl: string
 }
 
 function SeekBar({
@@ -101,8 +100,7 @@ export function Transport({
   preset,
   onPreset,
   master,
-  onMaster,
-  youtubeUrl
+  onMaster
 }: Props): React.ReactElement {
   return (
     <div className="glass rounded-2xl px-5 py-4 mt-4 flex flex-col gap-4">
@@ -155,14 +153,6 @@ export function Transport({
             }}
           />
         </div>
-
-        <button
-          onClick={() => window.stemkit.openExternal(youtubeUrl)}
-          title="Open on YouTube"
-          className="no-drag text-white/40 hover:text-white transition-colors"
-        >
-          <ExternalIcon />
-        </button>
       </div>
     </div>
   )
