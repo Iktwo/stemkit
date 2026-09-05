@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react'
 import type { Song } from '../../../shared/types'
 import { fmtTime } from '../lib/format'
 import { Thumb } from '../lib/thumbs'
-import { LogoMark, TrashIcon, PlusIcon, GearIcon } from './Icons'
+import { TrashIcon, PlusIcon, GearIcon } from './Icons'
 
 interface Props {
   songs: Song[]
@@ -43,18 +43,8 @@ export function Sidebar({
 
   return (
     <aside className="w-[280px] shrink-0 h-full flex flex-col border-r border-white/[0.08] bg-black/30 backdrop-blur-xl select-none">
-      {/* Window drag header with branding badge and settings button */}
-      <div className="drag-region h-14 shrink-0 flex items-center gap-2.5 pl-[80px] pr-4">
-        <LogoMark />
-        <span className="font-semibold tracking-tight text-[15px] text-white">StemKit</span>
-        <button
-          onClick={onOpenSettings}
-          title="Settings"
-          className="no-drag ml-auto w-7 h-7 rounded-lg bg-white/5 hover:bg-white/10 text-white/50 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
-        >
-          <GearIcon className="w-3.5 h-3.5" />
-        </button>
-      </div>
+      {/* Window drag header without branding badge */}
+      <div className="drag-region h-10 shrink-0" />
 
       {/* Top Action: New Split */}
       <div className="px-3 pb-3">
@@ -222,9 +212,18 @@ export function Sidebar({
               SOTA BS-RoFormer Engine
             </span>
           </div>
-          <span className="text-[10px] text-white/25 font-mono">
-            {appVersion ? `v${appVersion}` : 'Local'}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-white/25 font-mono">
+              {appVersion ? `v${appVersion}` : 'Local'}
+            </span>
+            <button
+              onClick={onOpenSettings}
+              title="Settings"
+              className="no-drag w-5 h-5 rounded-md hover:bg-white/10 text-white/35 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+            >
+              <GearIcon className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
       </div>
     </aside>

@@ -25,20 +25,13 @@ export interface AppSettings {
   // only rendered when an NVIDIA GPU is detected; enabling it downloads the
   // CUDA build of torch (~2.5GB) on first use
   gpuSplit: boolean
-  // hide the YouTube video while playing: stems are always played locally,
-  // this stops streaming the video and falls back to cached thumbnails
-  hideVideo: boolean
-  // anonymous usage analytics (GA4 Measurement Protocol); on by default
-  analytics: boolean
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
   shifts: 1,
   htdemucsFt: false,
   roformerVocals: false,
-  gpuSplit: false,
-  hideVideo: false,
-  analytics: true
+  gpuSplit: false
 }
 
 export interface EngineStatus {
@@ -123,7 +116,6 @@ export interface StemKitApi {
   installUpdate(): void
   getSettings(): Promise<AppSettings>
   setSettings(patch: Partial<AppSettings>): Promise<AppSettings>
-  trackEvent(name: string, params?: Record<string, string | number | boolean>): void
   getThumb(videoId: string): Promise<string | null>
   enginesStatus(): Promise<EngineStatus>
   fetchEngine(which: 'vocals' | 'ft' | 'gpu'): Promise<void>

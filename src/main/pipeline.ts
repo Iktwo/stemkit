@@ -24,7 +24,6 @@ import {
 } from './library'
 import { MODEL_EXTENDED, type JobEvent, type JobStage } from '../shared/types'
 import { parseVideoId } from '../shared/url'
-import { track } from './analytics'
 import { cacheThumbnail } from './thumbs'
 
 interface ActiveJob {
@@ -270,12 +269,10 @@ async function executeJob(job: ActiveJob, url: string, stems?: string[]): Promis
       stems: finalStems,
       took
     })
-    track('split_completed', { model: job.model, stems: finalStems.length, took })
     send({ kind: 'done', data: { videoId, song: songs[0] } })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     if (message !== 'cancelled') {
-      track('split_failed', { model: job.model })
       send({ kind: 'failed', data: { videoId, message } })
     }
   } finally {
@@ -472,7 +469,6 @@ export async function searchYouTube(query: string): Promise<
               : undefined,
         duration: typeof e.duration === 'number' ? Math.round(e.duration) : undefined
       }))
-    track('search', { results: mapped.length })
     return mapped
   } catch {
     return []
