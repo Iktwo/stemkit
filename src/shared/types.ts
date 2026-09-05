@@ -19,8 +19,6 @@ export interface Song {
 
 export interface AppSettings {
   shifts: 1 | 2
-  htdemucsFt: boolean
-  roformerVocals: boolean
   // windows + nvidia: separate on the GPU instead of the CPU. The toggle is
   // only rendered when an NVIDIA GPU is detected; enabling it downloads the
   // CUDA build of torch (~2.5GB) on first use
@@ -29,16 +27,10 @@ export interface AppSettings {
 
 export const DEFAULT_SETTINGS: AppSettings = {
   shifts: 1,
-  htdemucsFt: false,
-  roformerVocals: false,
   gpuSplit: false
 }
 
 export interface EngineStatus {
-  vocalsDownloading: boolean
-  vocalsReady: boolean
-  ftDownloading: boolean
-  ftVerified: boolean
   // cuda torch engine (windows + nvidia only)
   gpuDownloading: boolean
   gpuReady: boolean

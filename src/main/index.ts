@@ -129,8 +129,6 @@ app.whenReady().then(async () => {
   // off (the defaults)
   if (await refreshReady()) {
     const settings = loadSettings()
-    if (settings.roformerVocals) void ensureVocalsEngine()
-    if (settings.htdemucsFt) void ensureFtWeights()
     if (settings.gpuSplit) void ensureGpuEngine(undefined, true)
     // warm the informational GPU probe so Settings can show it right away
     void hasGpuAcceleration()

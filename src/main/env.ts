@@ -559,7 +559,6 @@ export function ensureVocalsEngine(onProgress?: (pct: number) => void): Promise<
    from the downloader's output and reported via env events */
 let ftWeightsPromise: Promise<boolean> | null = null
 const ftProgressListeners = new Set<(pct: number) => void>()
-let ftVerified = false
 
 // htdemucs_ft is a bag of 4 checkpoints (demucs/remote/htdemucs_ft.yaml);
 // torch-hub downloads them one after another, each with its own bar
@@ -624,7 +623,6 @@ export function ensureFtWeights(onProgress?: (pct: number) => void): Promise<boo
         for (const listener of ftProgressListeners) listener(pct)
       })
       sendEnvEvent('Fine-tuned engine ready', 'success')
-      ftVerified = true
       return true
     })()
       .catch((err) => {
@@ -771,10 +769,6 @@ function pipProgressPct(line: string): number | null {
 
 export function engineStatus(): EngineStatus {
   return {
-    vocalsDownloading: vocalsEnginePromise !== null,
-    vocalsReady: existsSync(vocalsEnginePath()),
-    ftDownloading: ftWeightsPromise !== null,
-    ftVerified,
     gpuDownloading: gpuEnginePromise !== null,
     gpuReady: IS_WIN && gpuInfo === true
   }

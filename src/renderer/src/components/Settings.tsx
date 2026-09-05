@@ -110,34 +110,12 @@ function SectionHeader({ label }: { label: string }): React.ReactElement {
 
 export function Settings({ settings, gpu, nvidiaGpu, onChange, onClose }: Props): React.ReactElement {
   const [engines, setEngines] = useState<EngineStatus | null>(null)
-  const [vocalsPct, setVocalsPct] = useState<number | null>(null)
-  const [ftPct, setFtPct] = useState<number | null>(null)
   const [gpuPct, setGpuPct] = useState<number | null>(null)
-  const [vocalsError, setVocalsError] = useState<string | null>(null)
-  const [ftError, setFtError] = useState<string | null>(null)
   const [gpuError, setGpuError] = useState<string | null>(null)
-  const [vocalsStarting, setVocalsStarting] = useState(false)
-  const [ftStarting, setFtStarting] = useState(false)
   const [gpuStarting, setGpuStarting] = useState(false)
 
   useEffect(() => {
     const off = window.stemkit.onEnvEvent((e) => {
-      const vocals = e.message.match(/vocals engine: (\d+)%/)
-      if (vocals) {
-        setVocalsPct(parseInt(vocals[1], 10))
-        setVocalsError(null)
-      }
-      if (/Vocals engine ready/.test(e.message)) setVocalsPct(100)
-      if (/Vocals engine download failed/.test(e.message)) setVocalsError(e.message)
-
-      const ft = e.message.match(/fine-tuned engine: (\d+)%/)
-      if (ft) {
-        setFtPct(parseInt(ft[1], 10))
-        setFtError(null)
-      }
-      if (/Fine-tuned engine ready/.test(e.message)) setFtPct(100)
-      if (/Fine-tuned engine download failed/.test(e.message)) setFtError(e.message)
-
       const gpuEngine = e.message.match(/GPU engine: (\d+)%/)
       if (gpuEngine) {
         setGpuPct(parseInt(gpuEngine[1], 10))
@@ -150,15 +128,13 @@ export function Settings({ settings, gpu, nvidiaGpu, onChange, onClose }: Props)
   }, [])
 
   // poll engine state so the confirm button / spinner reflect reality even
-  // for downloads started elsewhere (startup prefetch, a split in progress)
+  // for downloads started elsewhere
   useEffect(() => {
     let alive = true
     const tick = (): void => {
       void window.stemkit.enginesStatus().then((s) => {
         if (!alive) return
         setEngines(s)
-        if (s.vocalsDownloading || s.vocalsReady) setVocalsStarting(false)
-        if (s.ftDownloading || s.ftVerified) setFtStarting(false)
         if (s.gpuDownloading || s.gpuReady) setGpuStarting(false)
       })
     }
@@ -184,31 +160,12 @@ export function Settings({ settings, gpu, nvidiaGpu, onChange, onClose }: Props)
       : gpu === false && nvidiaGpu
         ? 'Running on CPU — enable GPU acceleration below for much faster splits'
         : gpu === false
-          ? 'No GPU found — expect ~20-35 min per song on CPU'
+          ? 'No GPU found — running on CPU'
           : null
 
-  const vocalsBusy = vocalsStarting || (engines?.vocalsDownloading ?? false)
-  const ftBusy = ftStarting || (engines?.ftDownloading ?? false)
   const gpuBusy = gpuStarting || (engines?.gpuDownloading ?? false)
-  const showVocalsConfirm =
-    !!engines && settings.roformerVocals && !engines.vocalsReady && !vocalsBusy
-  const showFtConfirm = !!engines && settings.htdemucsFt && !engines.ftVerified && !ftBusy
   const showGpuConfirm =
     !!engines && settings.gpuSplit && nvidiaGpu && !engines.gpuReady && !gpuBusy
-
-  const startVocals = (): void => {
-    setVocalsStarting(true)
-    setVocalsPct(null)
-    setVocalsError(null)
-    void window.stemkit.fetchEngine('vocals')
-  }
-
-  const startFt = (): void => {
-    setFtStarting(true)
-    setFtPct(null)
-    setFtError(null)
-    void window.stemkit.fetchEngine('ft')
-  }
 
   const startGpu = (): void => {
     setGpuStarting(true)
@@ -231,7 +188,7 @@ export function Settings({ settings, gpu, nvidiaGpu, onChange, onClose }: Props)
           <button
             onClick={onClose}
             title="Close"
-            className="no-drag w-7 h-7 rounded-lg hover:bg-white/10 text-white/50 hover:text-white flex items-center justify-center transition-colors"
+            className="no-drag w-7 h-7 rounded-lg hover:bg-white/10 text-white/50 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
           >
             <XIcon className="w-3.5 h-3.5" />
           </button>
@@ -239,26 +196,7 @@ export function Settings({ settings, gpu, nvidiaGpu, onChange, onClose }: Props)
 
         <div className="px-5 py-4 space-y-6 max-h-[70vh] overflow-y-auto">
           <section className="space-y-5">
-            <SectionHeader label="Separation" />
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0">
-                <p className="text-[13px] font-medium">Studio-quality vocals</p>
-                <p className="text-[11.5px] text-white/40 leading-relaxed mt-0.5">
-                  Cleaner, more natural vocal separation.
-                </p>
-                {gpuLine && <p className="text-[11px] text-white/30 mt-1">{gpuLine}</p>}
-                <DownloadBar pct={vocalsPct} starting={vocalsBusy && vocalsPct === null} error={vocalsError} />
-                {showVocalsConfirm && (
-                  <ConfirmButton label="Download now · 913 MB" onClick={startVocals} />
-                )}
-              </div>
-              <Toggle
-                on={settings.roformerVocals}
-                disabled={vocalsBusy}
-                loading={vocalsBusy}
-                onClick={() => onChange({ roformerVocals: !settings.roformerVocals })}
-              />
-            </div>
+            <SectionHeader label="Separation & Performance" />
 
             {nvidiaGpu && (
               <div className="flex items-start justify-between gap-4">
@@ -283,30 +221,12 @@ export function Settings({ settings, gpu, nvidiaGpu, onChange, onClose }: Props)
 
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
-                <p className="text-[13px] font-medium">Cleaner instruments</p>
-                <p className="text-[11.5px] text-white/40 leading-relaxed mt-0.5">
-                  Extra polish for drums, bass and other. Up to 4× slower.
-                </p>
-                <DownloadBar pct={ftPct} starting={ftBusy && ftPct === null} error={ftError} />
-                {showFtConfirm && (
-                  <ConfirmButton label="Download now · ~320 MB" onClick={startFt} />
-                )}
-              </div>
-              <Toggle
-                on={settings.htdemucsFt}
-                disabled={ftBusy}
-                loading={ftBusy}
-                onClick={() => onChange({ htdemucsFt: !settings.htdemucsFt })}
-              />
-            </div>
-
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0">
                 <p className="text-[13px] font-medium">Extra quality pass</p>
                 <p className="text-[11.5px] text-white/40 leading-relaxed mt-0.5">
                   Separates the song twice and blends the takes for cleaner results. Up to 3×
                   slower.
                 </p>
+                {gpuLine && <p className="text-[11px] text-white/30 mt-1">{gpuLine}</p>}
               </div>
               <div className="flex shrink-0 rounded-lg bg-white/[0.06] p-0.5 border border-white/[0.08]">
                 {([
@@ -316,7 +236,7 @@ export function Settings({ settings, gpu, nvidiaGpu, onChange, onClose }: Props)
                   <button
                     key={opt.v}
                     onClick={() => onChange({ shifts: opt.v })}
-                    className={`no-drag px-2.5 h-6 rounded-md text-[12px] font-semibold transition-colors ${
+                    className={`no-drag px-2.5 h-6 rounded-md text-[12px] font-semibold transition-colors cursor-pointer ${
                       settings.shifts === opt.v
                         ? 'bg-white text-black'
                         : 'text-white/45 hover:text-white/80'
@@ -329,8 +249,8 @@ export function Settings({ settings, gpu, nvidiaGpu, onChange, onClose }: Props)
             </div>
 
             <p className="text-[11px] text-white/30 leading-relaxed">
-              Changes apply to future splits. Songs you already split keep their current sound —
-              split them again to use the new settings.
+              Separates audio into 6 isolated stems (Vocals, Drums, Bass, Guitar, Piano, Other)
+              using SOTA BS-RoFormer. Changes apply to future splits.
             </p>
           </section>
         </div>

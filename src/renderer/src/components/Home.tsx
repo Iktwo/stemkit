@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  MODEL_DEFAULT,
   MODEL_EXTENDED,
   DEFAULT_STEMS,
   type AppSettings,
@@ -29,7 +28,7 @@ export function Home({
   hasSongs,
   songs,
   pending = {},
-  settings,
+  settings: _settings,
   onStart,
   onSelect,
   onOpenSettings
@@ -43,35 +42,7 @@ export function Home({
   const seqRef = useRef(0)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const usesExtended = [...selected].some((id) => id === 'guitar' || id === 'piano')
-  const derivedModel = usesExtended ? MODEL_EXTENDED : MODEL_DEFAULT
   const orderedSelection = ALL_STEMS.filter((id) => selected.has(id))
-  // the fine-tuned engine only covers the standard 4-stem split; guitar and
-  // piano always run through the 6-source engine, so they're unavailable
-  // while it's on
-  const ftOn = !!settings?.htdemucsFt
-  useEffect(() => {
-    if (!ftOn) return
-    setSelected((prev) => {
-      if (!prev.has('guitar') && !prev.has('piano')) return prev
-      const next = new Set(prev)
-      next.delete('guitar')
-      next.delete('piano')
-      return next
-    })
-  }, [ftOn])
-  const engineLabel = usesExtended
-    ? '6-source engine'
-    : settings?.roformerVocals
-      ? 'studio engine'
-      : settings?.htdemucsFt
-        ? 'enhanced engine'
-        : 'standard engine'
-  const timeHint = usesExtended || settings?.roformerVocals
-    ? 'A 4-minute song takes about three minutes to split.'
-    : settings?.htdemucsFt || settings?.shifts === 2
-      ? 'A 4-minute song takes a little longer with the quality options on.'
-      : 'A 4-minute song takes about three minutes to split.'
 
   const toggleStem = (id: StemId): void => {
     setSelected((prev) => {
@@ -89,7 +60,7 @@ export function Home({
   const startWithSelection = (videoIdOrUrl: string): void => {
     onStart(
       videoIdOrUrl.startsWith('http') ? videoIdOrUrl : `https://www.youtube.com/watch?v=${videoIdOrUrl}`,
-      derivedModel,
+      MODEL_EXTENDED,
       orderedSelection
     )
   }
@@ -194,7 +165,7 @@ export function Home({
               <span className="text-[11px] font-semibold text-olive-300 bg-olive-500/15 px-2 py-0.5 rounded-full border border-olive-500/25">
                 {selected.size === 0
                   ? 'select at least 1'
-                  : `${engineLabel} · ${selected.size} ${selected.size === 1 ? 'stem' : 'stems'}`}
+                  : `${selected.size} ${selected.size === 1 ? 'stem' : 'stems'} selected`}
               </span>
             </div>
 
@@ -242,7 +213,6 @@ export function Home({
           {/* Instrument Pills */}
           <div className="flex items-center gap-2 flex-wrap">
             {ALL_STEMS.map((id) => {
-              if (ftOn && (id === 'guitar' || id === 'piano')) return null
               const info = STEM_INFO[id]
               const on = selected.has(id)
               return (
@@ -366,7 +336,6 @@ export function Home({
         {!hasSongs && results.length === 0 && !searching && (
           <p className="mt-8 text-center text-xs text-white/25 leading-relaxed">
             Fast Apple Silicon MPS separation · Full 6-stem frequency band isolation
-            <span className="block mt-1 text-white/20">{timeHint}</span>
           </p>
         )}
       </div>

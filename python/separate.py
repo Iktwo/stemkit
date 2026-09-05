@@ -54,6 +54,9 @@ def save_wav_f32(path, data, sr):
         f.write(payload)
 
 
+save_wav = save_wav_f32
+
+
 def separate_roformer(audio, sr, out_dir, wanted, device_name="auto"):
     import torch
     import torch.nn as nn
@@ -67,6 +70,9 @@ def separate_roformer(audio, sr, out_dir, wanted, device_name="auto"):
         device_str = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
     else:
         device_str = device_name
+
+    if device_str == "cuda" and not torch.cuda.is_available():
+        fail("GPU engine not available (no NVIDIA GPU, or the CUDA build of torch is not installed)")
 
     device = torch.device(device_str)
     emit(type="progress", stage="model", pct=0, message=f"loading BS-RoFormer (SOTA 6-stem) on {device_str}")
@@ -161,6 +167,11 @@ def separate_roformer(audio, sr, out_dir, wanted, device_name="auto"):
             device = torch.device("cpu")
             model.to(device)
             sources = run_demix(device)
+        elif device_str == "cuda":
+            emit(type="progress", stage="separate", pct=0, message=f"cuda failed ({e}), falling back to cpu")
+            device = torch.device("cpu")
+            model.to(device)
+            sources = run_demix(device)
         else:
             fail(f"separation failed: {e}")
 
@@ -170,7 +181,7 @@ def separate_roformer(audio, sr, out_dir, wanted, device_name="auto"):
         if wanted is not None and name not in wanted:
             continue
         stem_path = os.path.join(out_dir, f"{name}.wav")
-        save_wav(stem_path, sources[idx], sr)
+        save_wav_f32(stem_path, sources[idx], sr)
         written.append(name)
         emit(type="stem", name=name)
 
@@ -299,7 +310,7 @@ def separate_demucs(audio, sr, out_dir, model_name, wanted, device_name="auto", 
         if wanted is not None and name not in wanted:
             continue
         path = os.path.join(out_dir, f"{name}.wav")
-        save_wav(path, out_cpu[i], sr)
+        save_wav_f32(path, out_cpu[i], sr)
         written.append(name)
         emit(type="stem", name=name)
 
