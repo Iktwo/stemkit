@@ -2,13 +2,16 @@ import { useEffect, useRef, useState } from 'react'
 import { fmtTime } from '../lib/format'
 import { PlayIcon, PauseIcon } from './Icons'
 
-export type PresetId = 'all' | 'karaoke' | 'acapella' | 'drumnbass'
+import type { PresetId } from '../lib/PlayerContext'
+
+export type { PresetId }
 
 const PRESETS: { id: PresetId; label: string }[] = [
   { id: 'all', label: 'All' },
   { id: 'karaoke', label: 'Karaoke' },
   { id: 'acapella', label: 'Acapella' },
-  { id: 'drumnbass', label: 'Drums + Bass' }
+  { id: 'drumnbass', label: 'Drums + Bass' },
+  { id: 'custom', label: 'Custom' }
 ]
 
 interface Props {

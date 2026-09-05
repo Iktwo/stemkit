@@ -191,7 +191,7 @@ export function Player({ song, settings, onReprocess }: Props): React.ReactEleme
             getPosition={getPosition}
             onTogglePlay={togglePlay}
             onSeek={seekTo}
-            preset={preset === 'custom' ? 'all' : preset}
+            preset={preset}
             onPreset={applyPreset}
             master={master}
             onMaster={setMasterVolume}

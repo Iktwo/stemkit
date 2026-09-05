@@ -11,9 +11,25 @@ import {
 import type { Song, StemId } from '../../../shared/types'
 import { engine, decodePayload, type BufferMap } from './engine'
 
-export type PresetId = 'all' | 'karaoke' | 'acapella' | 'drumnbass'
+export type PresetId = 'all' | 'karaoke' | 'acapella' | 'drumnbass' | 'custom'
 
-export function getPresetMutesAndSolos(p: PresetId | 'custom'): {
+export function detectPreset(mutes: Set<StemId>, solos: Set<StemId>): PresetId {
+  if (mutes.size === 0 && solos.size === 0) {
+    return 'all'
+  }
+  if (mutes.size === 1 && mutes.has('vocals') && solos.size === 0) {
+    return 'karaoke'
+  }
+  if (mutes.size === 0 && solos.size === 1 && solos.has('vocals')) {
+    return 'acapella'
+  }
+  if (mutes.size === 0 && solos.size === 2 && solos.has('drums') && solos.has('bass')) {
+    return 'drumnbass'
+  }
+  return 'custom'
+}
+
+export function getPresetMutesAndSolos(p: PresetId): {
   mutes: Set<StemId>
   solos: Set<StemId>
 } {
@@ -94,7 +110,7 @@ export interface PlayerContextValue {
   mutes: Set<StemId>
   solos: Set<StemId>
   master: number
-  preset: PresetId | 'custom'
+  preset: PresetId
   getPosition: () => number
   loadSong: (song: Song, autoPlay?: boolean) => Promise<void>
   togglePlay: () => void
@@ -120,12 +136,13 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
   const [mutes, setMutes] = useState<Set<StemId>>(new Set())
   const [solos, setSolos] = useState<Set<StemId>>(new Set())
   const [master, setMaster] = useState(0.9)
-  const [preset, setPreset] = useState<PresetId | 'custom'>('all')
+  const [preset, setPreset] = useState<PresetId>('all')
 
   const posRef = useRef(0)
   const playingRef = useRef(false)
   const loadTokenRef = useRef(0)
-  const presetRef = useRef<PresetId | 'custom'>('all')
+  const presetRef = useRef<PresetId>('all')
+  const customMixRef = useRef<{ mutes: Set<StemId>; solos: Set<StemId> } | null>(null)
 
   const currentSongRef = useRef<Song | null>(null)
   currentSongRef.current = currentSong
@@ -193,25 +210,43 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
   }, [])
 
   const toggleStemMute = useCallback((id: StemId): void => {
-    presetRef.current = 'custom'
     setMutes((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
+      const nextMutes = new Set(prev)
+      if (nextMutes.has(id)) nextMutes.delete(id)
+      else nextMutes.add(id)
+
+      mutesRef.current = nextMutes
+      const detected = detectPreset(nextMutes, solosRef.current)
+      presetRef.current = detected
+      setPreset(detected)
+      if (detected === 'custom') {
+        customMixRef.current = {
+          mutes: new Set(nextMutes),
+          solos: new Set(solosRef.current)
+        }
+      }
+      return nextMutes
     })
-    setPreset('custom')
   }, [])
 
   const toggleStemSolo = useCallback((id: StemId): void => {
-    presetRef.current = 'custom'
     setSolos((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
+      const nextSolos = new Set(prev)
+      if (nextSolos.has(id)) nextSolos.delete(id)
+      else nextSolos.add(id)
+
+      solosRef.current = nextSolos
+      const detected = detectPreset(mutesRef.current, nextSolos)
+      presetRef.current = detected
+      setPreset(detected)
+      if (detected === 'custom') {
+        customMixRef.current = {
+          mutes: new Set(mutesRef.current),
+          solos: new Set(nextSolos)
+        }
+      }
+      return nextSolos
     })
-    setPreset('custom')
   }, [])
 
   const setMasterVolume = useCallback((vol: number): void => {
@@ -221,7 +256,25 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
   const applyPreset = useCallback((p: PresetId): void => {
     presetRef.current = p
     setPreset(p)
+    if (p === 'custom') {
+      if (customMixRef.current) {
+        const nextMutes = new Set(customMixRef.current.mutes)
+        const nextSolos = new Set(customMixRef.current.solos)
+        mutesRef.current = nextMutes
+        solosRef.current = nextSolos
+        setMutes(nextMutes)
+        setSolos(nextSolos)
+      } else {
+        customMixRef.current = {
+          mutes: new Set(mutesRef.current),
+          solos: new Set(solosRef.current)
+        }
+      }
+      return
+    }
     const { mutes: nextMutes, solos: nextSolos } = getPresetMutesAndSolos(p)
+    mutesRef.current = nextMutes
+    solosRef.current = nextSolos
     setMutes(nextMutes)
     setSolos(nextSolos)
   }, [])
@@ -240,8 +293,11 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
     setVols({})
     setMutes(new Set())
     setSolos(new Set())
+    mutesRef.current = new Set()
+    solosRef.current = new Set()
     setPreset('all')
     presetRef.current = 'all'
+    customMixRef.current = null
   }, [])
 
   const loadSong = useCallback(
@@ -279,11 +335,20 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
         const activePreset = presetRef.current
         if (activePreset !== 'custom') {
           const { mutes: activeMutes, solos: activeSolos } = getPresetMutesAndSolos(activePreset)
+          mutesRef.current = activeMutes
+          solosRef.current = activeSolos
           setMutes(activeMutes)
           setSolos(activeSolos)
           engine.applyMix(newVols, activeMutes, activeSolos, masterRef.current)
         } else {
-          engine.applyMix(newVols, mutesRef.current, solosRef.current, masterRef.current)
+          const stemKeys = Object.keys(cached) as StemId[]
+          let activeSolos = solosRef.current
+          if (activeSolos.size > 0 && ![...activeSolos].some((id) => stemKeys.includes(id))) {
+            activeSolos = new Set<StemId>()
+            solosRef.current = activeSolos
+            setSolos(activeSolos)
+          }
+          engine.applyMix(newVols, mutesRef.current, activeSolos, masterRef.current)
         }
 
         if (autoPlay && !playingRef.current) {
@@ -305,6 +370,8 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
       const currentPreset = presetRef.current
       if (currentPreset !== 'custom') {
         const { mutes: initMutes, solos: initSolos } = getPresetMutesAndSolos(currentPreset)
+        mutesRef.current = initMutes
+        solosRef.current = initSolos
         setMutes(initMutes)
         setSolos(initSolos)
       }
@@ -324,11 +391,20 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
         const activePreset = presetRef.current
         if (activePreset !== 'custom') {
           const { mutes: activeMutes, solos: activeSolos } = getPresetMutesAndSolos(activePreset)
+          mutesRef.current = activeMutes
+          solosRef.current = activeSolos
           setMutes(activeMutes)
           setSolos(activeSolos)
           engine.applyMix(newVols, activeMutes, activeSolos, masterRef.current)
         } else {
-          engine.applyMix(newVols, mutesRef.current, solosRef.current, masterRef.current)
+          const stemKeys = Object.keys(decoded) as StemId[]
+          let activeSolos = solosRef.current
+          if (activeSolos.size > 0 && ![...activeSolos].some((id) => stemKeys.includes(id))) {
+            activeSolos = new Set<StemId>()
+            solosRef.current = activeSolos
+            setSolos(activeSolos)
+          }
+          engine.applyMix(newVols, mutesRef.current, activeSolos, masterRef.current)
         }
 
         if (autoPlay && !playingRef.current) {
