@@ -91,6 +91,77 @@ export interface UpdateEvent {
   pct?: number
 }
 
+export interface KaraokeWord {
+  word: string
+  start: number
+  end: number
+  probability?: number
+}
+
+export interface KaraokeLine {
+  start: number
+  end: number
+  text: string
+  words: KaraokeWord[]
+}
+
+export interface KaraokeData {
+  model?: string
+  language?: string
+  languageProbability?: number
+  duration?: number
+  lines: KaraokeLine[]
+}
+
+export interface LyricsProgress {
+  videoId: string
+  pct: number
+  message?: string
+}
+
+export interface TabNote {
+  string: number
+  fret: number
+  pitch: number
+  start: number
+  end: number
+  amplitude: number
+  chord?: string
+}
+
+export interface TabMeasure {
+  number: number
+  start: number
+  end: number
+  chord?: string
+  notes: TabNote[]
+}
+
+export interface GuitarTabData {
+  instrument?: 'guitar' | 'bass'
+  model?: string
+  bpm: number
+  mode?: 'chord' | 'note'
+  voicingStyle?: string
+  tuning: string[]
+  tuningPitches?: number[]
+  positionAnchor?: string
+  sensitivity?: string
+  duration: number
+  notesCount: number
+  midiPath?: string
+  notes: TabNote[]
+  measures: TabMeasure[]
+  asciiTab: string
+}
+
+export interface TabProgress {
+  videoId: string
+  instrument?: 'guitar' | 'bass'
+  pct: number
+  message?: string
+}
+
 export interface StemKitApi {
   envStatus(): Promise<EnvStatus>
   envBootstrap(): Promise<boolean>
@@ -111,8 +182,27 @@ export interface StemKitApi {
   getThumb(videoId: string): Promise<string | null>
   enginesStatus(): Promise<EngineStatus>
   fetchEngine(which: 'vocals' | 'ft' | 'gpu'): Promise<void>
+  getLyrics(videoId: string): Promise<KaraokeData | null>
+  transcribeLyrics(videoId: string, model?: string): Promise<KaraokeData>
+  saveLyrics(videoId: string, data: KaraokeData): Promise<boolean>
+  getTabs(videoId: string, instrument?: 'guitar' | 'bass'): Promise<GuitarTabData | null>
+  transcribeTabs(
+    videoId: string,
+    tuning?: string,
+    position?: string,
+    sensitivity?: string,
+    mode?: 'chord' | 'note',
+    voicing?: string,
+    force?: boolean,
+    instrument?: 'guitar' | 'bass'
+  ): Promise<GuitarTabData>
+  saveTabs(videoId: string, data: GuitarTabData, instrument?: 'guitar' | 'bass'): Promise<boolean>
+  exportTabMidi(videoId: string, instrument?: 'guitar' | 'bass'): Promise<{ saved: boolean; path?: string }>
+  exportTabAscii(videoId: string, instrument?: 'guitar' | 'bass'): Promise<{ saved: boolean; path?: string }>
   onUpdateEvent(cb: (ev: UpdateEvent) => void): () => void
   onJobEvent(cb: (ev: JobEvent) => void): () => void
   onEnvEvent(cb: (ev: EnvEvent) => void): () => void
   onSettingsChange(cb: (settings: AppSettings) => void): () => void
+  onLyricsProgress(cb: (ev: LyricsProgress) => void): () => void
+  onTabProgress(cb: (ev: TabProgress) => void): () => void
 }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react'
 import type { StemId } from '../../../shared/types'
-import { DownloadIcon } from './Icons'
+import { DownloadIcon, GuitarIcon, BassIcon } from './Icons'
 
 export interface StemMeta {
   id: StemId
@@ -50,6 +50,7 @@ interface Props {
   onVolume: (v: number) => void
   onSeek: (seconds: number) => void
   onExport?: () => void
+  onOpenTabs?: () => void
   playing?: boolean
 }
 
@@ -67,6 +68,7 @@ export function StemLane({
   onVolume,
   onSeek,
   onExport,
+  onOpenTabs,
   playing = false
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -188,6 +190,21 @@ export function StemLane({
           background: `linear-gradient(to right, ${meta.color} ${volume * 100}%, rgba(255,255,255,0.14) ${volume * 100}%)`
         }}
       />
+
+      {(meta.id === 'guitar' || meta.id === 'bass') && onOpenTabs && (
+        <button
+          onClick={onOpenTabs}
+          title={meta.id === 'bass' ? 'Open Bass Tabs' : 'Open Guitar Tabs'}
+          className={`no-drag px-2.5 h-6 rounded-md border flex items-center gap-1 text-[11px] font-semibold transition-colors shrink-0 cursor-pointer shadow-sm ${
+            meta.id === 'bass'
+              ? 'bg-amber-500/20 hover:bg-amber-500/30 border-amber-500/30 text-amber-300'
+              : 'bg-emerald-500/20 hover:bg-emerald-500/30 border-emerald-500/30 text-emerald-300'
+          }`}
+        >
+          {meta.id === 'bass' ? <BassIcon className="w-3 h-3" /> : <GuitarIcon className="w-3 h-3" />}
+          <span>Tabs</span>
+        </button>
+      )}
 
       {onExport && (
         <button

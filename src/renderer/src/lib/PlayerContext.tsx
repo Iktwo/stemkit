@@ -62,7 +62,7 @@ export function clearBufferCache(videoId?: string): void {
   }
 }
 
-export function getDecoded(videoId: string, isCancelled?: () => boolean): Promise<BufferMap> {
+export function getDecoded(videoId: string): Promise<BufferMap> {
   const cached = bufferCache.get(videoId)
   if (cached && Object.keys(cached).length > 0) {
     // Refresh LRU order
@@ -75,10 +75,7 @@ export function getDecoded(videoId: string, isCancelled?: () => boolean): Promis
   if (!entry) {
     entry = window.stemkit
       .getBuffers(videoId)
-      .then((payload) => {
-        if (isCancelled && isCancelled()) throw new Error('cancelled')
-        return decodePayload(payload, isCancelled)
-      })
+      .then((payload) => decodePayload(payload))
       .then((decoded) => {
         inFlightDecodes.delete(videoId)
         if (Object.keys(decoded).length > 0) {
@@ -117,6 +114,7 @@ export interface PlayerContextValue {
   seekTo: (seconds: number) => void
   setStemVolume: (id: StemId, vol: number) => void
   toggleStemMute: (id: StemId) => void
+  setStemMute: (id: StemId, muted: boolean) => void
   toggleStemSolo: (id: StemId) => void
   setMasterVolume: (vol: number) => void
   applyPreset: (p: PresetId) => void
@@ -229,6 +227,26 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
     })
   }, [])
 
+  const setStemMute = useCallback((id: StemId, muted: boolean): void => {
+    setMutes((prev) => {
+      const nextMutes = new Set(prev)
+      if (muted) nextMutes.add(id)
+      else nextMutes.delete(id)
+
+      mutesRef.current = nextMutes
+      const detected = detectPreset(nextMutes, solosRef.current)
+      presetRef.current = detected
+      setPreset(detected)
+      if (detected === 'custom') {
+        customMixRef.current = {
+          mutes: new Set(nextMutes),
+          solos: new Set(solosRef.current)
+        }
+      }
+      return nextMutes
+    })
+  }, [])
+
   const toggleStemSolo = useCallback((id: StemId): void => {
     setSolos((prev) => {
       const nextSolos = new Set(prev)
@@ -303,11 +321,16 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
   const loadSong = useCallback(
     async (song: Song, autoPlay = false): Promise<void> => {
       // If the song is already loaded, don't reset or stop!
-      if (currentSongRef.current?.videoId === song.videoId && Object.keys(buffersRef.current).length > 0) {
-        if (autoPlay && !playingRef.current) {
-          togglePlayRef.current()
+      if (currentSongRef.current?.videoId === song.videoId) {
+        if (Object.keys(buffersRef.current).length > 0) {
+          if (autoPlay && !playingRef.current) {
+            togglePlayRef.current()
+          }
+          return
         }
-        return
+        if (inFlightDecodes.has(song.videoId)) {
+          return
+        }
       }
 
       const token = ++loadTokenRef.current
@@ -377,13 +400,13 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
       }
 
       try {
-        const decoded = await getDecoded(song.videoId, () => loadTokenRef.current !== token)
+        const decoded = await getDecoded(song.videoId)
         if (loadTokenRef.current !== token) return
         setBuffers(decoded)
         engine.setBuffers(decoded)
         const newVols = Object.fromEntries(Object.keys(decoded).map((id) => [id, 1]))
         setVols(newVols)
-        const d = engine.trackDuration()
+        const d = engine.trackDuration() || song.duration || 0
         if (d > 0) setDuration(d)
         setDecoding(false)
 
@@ -416,9 +439,7 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
         if (loadTokenRef.current !== token) return
         setDecoding(false)
         const msg = err instanceof Error ? err.message : String(err)
-        if (msg !== 'cancelled') {
-          setDecodeError(msg)
-        }
+        setDecodeError(msg)
       }
     },
     []
@@ -442,6 +463,7 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
     seekTo,
     setStemVolume,
     toggleStemMute,
+    setStemMute,
     toggleStemSolo,
     setMasterVolume,
     applyPreset,

@@ -103,11 +103,25 @@ export function roformerScript(): string {
   return join(app.getAppPath(), 'python', 'roformer.py')
 }
 
+export function transcribeScript(): string {
+  if (app.isPackaged) {
+    return join(process.resourcesPath, 'python', 'transcribe.py')
+  }
+  return join(app.getAppPath(), 'python', 'transcribe.py')
+}
+
+export function tabScript(): string {
+  if (app.isPackaged) {
+    return join(process.resourcesPath, 'python', 'tab_transcribe.py')
+  }
+  return join(app.getAppPath(), 'python', 'tab_transcribe.py')
+}
+
 export function modelsDir(): string {
   return join(userDataDir(), 'models')
 }
 
-const ENGINE_DEPS = ['beartype', 'rotary_embedding_torch', 'einops']
+const ENGINE_DEPS = ['beartype', 'rotary_embedding_torch', 'einops', 'faster_whisper', 'soundfile']
 let engineDepsReady = false
 
 let gpuProbe: Promise<boolean> | null = null
@@ -196,7 +210,7 @@ export async function ensureEngineDeps(): Promise<boolean> {
     await new Promise<void>((resolve, reject) => {
       const child = spawn(
         venvPython(),
-        ['-m', 'pip', 'install', '-q', 'beartype', 'rotary-embedding-torch', 'einops'],
+        ['-m', 'pip', 'install', '-q', 'beartype', 'rotary-embedding-torch', 'einops', 'faster-whisper', 'soundfile'],
         { env: { ...process.env } }
       )
       child.on('close', (code) =>
@@ -210,6 +224,56 @@ export async function ensureEngineDeps(): Promise<boolean> {
   } catch (err) {
     sendEnvEvent(
       `Engine components failed: ${err instanceof Error ? err.message : String(err)}`,
+      'error'
+    )
+    return false
+  }
+}
+
+const TAB_ENGINE_DEPS = ['basic_pitch', 'pretty_midi', 'scipy', 'resampy', 'librosa']
+let tabDepsReady = false
+
+export async function ensureTabEngineDeps(): Promise<boolean> {
+  if (tabDepsReady) return true
+  try {
+    await runCapture(
+      venvPython(),
+      ['-c', `import ${TAB_ENGINE_DEPS.join(', ')}`],
+      20000
+    )
+    tabDepsReady = true
+    return true
+  } catch {}
+  sendEnvEvent('Preparing guitar tablature transcription engine…')
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(
+        venvPython(),
+        ['-m', 'pip', 'install', '-q', 'pretty-midi', 'scipy', 'resampy', 'librosa', 'mir-eval'],
+        { env: { ...process.env } }
+      )
+      child.on('close', (code) =>
+        code === 0 ? resolve() : reject(new Error(`pip install tab deps failed (${code})`))
+      )
+      child.on('error', reject)
+    })
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(
+        venvPython(),
+        ['-m', 'pip', 'install', '-q', '--no-deps', 'basic-pitch'],
+        { env: { ...process.env } }
+      )
+      child.on('close', (code) =>
+        code === 0 ? resolve() : reject(new Error(`pip install basic-pitch failed (${code})`))
+      )
+      child.on('error', reject)
+    })
+    tabDepsReady = true
+    sendEnvEvent('Guitar tablature transcription engine ready', 'success')
+    return true
+  } catch (err) {
+    sendEnvEvent(
+      `Guitar tab engine setup failed: ${err instanceof Error ? err.message : String(err)}`,
       'error'
     )
     return false
@@ -870,7 +934,9 @@ export async function bootstrap(): Promise<boolean> {
         'beartype',
         'rotary-embedding-torch',
         'einops',
-        'yt-dlp'
+        'yt-dlp',
+        'faster-whisper',
+        'soundfile'
       ])
       let buffer = ''
       child.stdout?.on('data', (chunk: Buffer) => {

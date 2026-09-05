@@ -1,9 +1,9 @@
 import { app, BrowserWindow, ipcMain, shell, dialog } from 'electron'
 import { join, normalize, extname } from 'path'
-import { existsSync, copyFileSync, mkdirSync, createReadStream, statSync } from 'fs'
+import { existsSync, copyFileSync, writeFileSync, mkdirSync, createReadStream, statSync } from 'fs'
 import { createServer, type Server } from 'http'
 import type { AddressInfo } from 'net'
-import type { AppSettings } from '../shared/types'
+import type { AppSettings, KaraokeData, GuitarTabData } from '../shared/types'
 import {
   detectTools,
   bootstrap,
@@ -20,8 +20,8 @@ import {
   getStatus
 } from './env'
 import { loadSettings, saveSettings } from './settings'
-import { loadSongs, removeSong, stemBuffers, stemsDir, stemsFor, mixWavPath } from './library'
-import { startJob, cancelJob, searchYouTube } from './pipeline'
+import { loadSongs, removeSong, stemBuffers, stemsDir, stemsFor, mixWavPath, loadLyrics, saveLyrics, loadTabs, saveTabs, tabMidiPath } from './library'
+import { startJob, cancelJob, searchYouTube, transcribeLyrics, transcribeGuitarTab } from './pipeline'
 import { initUpdater } from './updater'
 import { runSmoke } from './smoke'
 import { getThumb } from './thumbs'
@@ -227,6 +227,86 @@ app.whenReady().then(async () => {
     else if (which === 'ft') void ensureFtWeights()
     else void ensureGpuEngine()
   })
+  ipcMain.handle('lyrics:get', (_e, videoId: string) => loadLyrics(videoId))
+  ipcMain.handle('lyrics:transcribe', (_e, videoId: string, model?: string) => transcribeLyrics(videoId, model, true))
+  ipcMain.handle('lyrics:save', (_e, videoId: string, data: KaraokeData) => {
+    saveLyrics(videoId, data)
+    return true
+  })
+  ipcMain.handle('tab:get', (_e, videoId: string, instrument?: 'guitar' | 'bass') =>
+    loadTabs(videoId, instrument ?? 'guitar')
+  )
+  ipcMain.handle(
+    'tab:transcribe',
+    (
+      _e,
+      videoId: string,
+      tuning?: string,
+      position?: string,
+      sensitivity?: string,
+      mode?: 'chord' | 'note',
+      voicing?: string,
+      force?: boolean,
+      instrument?: 'guitar' | 'bass'
+    ) =>
+      transcribeGuitarTab(
+        videoId,
+        tuning,
+        position,
+        sensitivity,
+        mode,
+        voicing,
+        force ?? true,
+        instrument ?? 'guitar'
+      )
+  )
+  ipcMain.handle(
+    'tab:save',
+    (_e, videoId: string, data: GuitarTabData, instrument?: 'guitar' | 'bass') => {
+      saveTabs(videoId, data, instrument ?? 'guitar')
+      return true
+    }
+  )
+  ipcMain.handle(
+    'tab:exportMidi',
+    async (_e, videoId: string, instrument?: 'guitar' | 'bass') => {
+      const inst = instrument ?? 'guitar'
+      const midiFile = tabMidiPath(videoId, inst)
+      if (!existsSync(midiFile)) {
+        throw new Error(`MIDI file not found for this ${inst} tab.`)
+      }
+      const song = loadSongs().find((s) => s.videoId === videoId)
+      const baseName = sanitizeName(song?.title ?? `${inst}-tab`)
+      const { canceled, filePath } = await dialog.showSaveDialog({
+        title: `Export ${inst === 'bass' ? 'Bass' : 'Guitar'} Tab MIDI`,
+        defaultPath: `${baseName}-${inst}-tab.mid`,
+        filters: [{ name: 'MIDI File', extensions: ['mid'] }]
+      })
+      if (canceled || !filePath) return { saved: false }
+      copyFileSync(midiFile, filePath)
+      return { saved: true, path: filePath }
+    }
+  )
+  ipcMain.handle(
+    'tab:exportAscii',
+    async (_e, videoId: string, instrument?: 'guitar' | 'bass') => {
+      const inst = instrument ?? 'guitar'
+      const data = loadTabs(videoId, inst)
+      if (!data?.asciiTab) {
+        throw new Error(`Tablature not found for this ${inst} track.`)
+      }
+      const song = loadSongs().find((s) => s.videoId === videoId)
+      const baseName = sanitizeName(song?.title ?? `${inst}-tab`)
+      const { canceled, filePath } = await dialog.showSaveDialog({
+        title: `Export ASCII ${inst === 'bass' ? 'Bass' : 'Guitar'} Tab`,
+        defaultPath: `${baseName}-${inst}-tab.txt`,
+        filters: [{ name: 'Text Tablature', extensions: ['txt'] }]
+      })
+      if (canceled || !filePath) return { saved: false }
+      writeFileSync(filePath, data.asciiTab, 'utf8')
+      return { saved: true, path: filePath }
+    }
+  )
   initUpdater()
   ipcMain.handle('open-external', (_e, url: string) => {
     if (/^https:\/\/(www\.)?(youtube\.com|youtu\.be)\//.test(url)) {

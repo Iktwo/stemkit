@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'fs'
 import { readFile } from 'fs/promises'
 import { join } from 'path'
 import { userDataDir } from './env'
-import { DEFAULT_STEMS, type Song } from '../shared/types'
+import { DEFAULT_STEMS, type Song, type KaraokeData, type GuitarTabData } from '../shared/types'
 
 function libraryFile(): string {
   return join(userDataDir(), 'library.json')
@@ -26,6 +26,54 @@ export function mixWavPath(videoId: string): string {
 
 export function rawDownloadPath(videoId: string): string {
   return join(songDir(videoId), 'raw.%(ext)s')
+}
+
+export function lyricsPath(videoId: string): string {
+  return join(songDir(videoId), 'lyrics.json')
+}
+
+export function loadLyrics(videoId: string): KaraokeData | null {
+  try {
+    const file = lyricsPath(videoId)
+    if (!existsSync(file)) return null
+    const raw = readFileSync(file, 'utf8')
+    return JSON.parse(raw) as KaraokeData
+  } catch {
+    return null
+  }
+}
+
+export function saveLyrics(videoId: string, data: KaraokeData): void {
+  mkdirSync(songDir(videoId), { recursive: true })
+  writeFileSync(lyricsPath(videoId), JSON.stringify(data, null, 2))
+}
+
+export function tabPath(videoId: string, instrument: 'guitar' | 'bass' = 'guitar'): string {
+  return instrument === 'bass'
+    ? join(songDir(videoId), 'tabs_bass.json')
+    : join(songDir(videoId), 'tabs.json')
+}
+
+export function tabMidiPath(videoId: string, instrument: 'guitar' | 'bass' = 'guitar'): string {
+  return instrument === 'bass'
+    ? join(songDir(videoId), 'tabs_bass.mid')
+    : join(songDir(videoId), 'tabs.mid')
+}
+
+export function loadTabs(videoId: string, instrument: 'guitar' | 'bass' = 'guitar'): GuitarTabData | null {
+  try {
+    const file = tabPath(videoId, instrument)
+    if (!existsSync(file)) return null
+    const raw = readFileSync(file, 'utf8')
+    return JSON.parse(raw) as GuitarTabData
+  } catch {
+    return null
+  }
+}
+
+export function saveTabs(videoId: string, data: GuitarTabData, instrument: 'guitar' | 'bass' = 'guitar'): void {
+  mkdirSync(songDir(videoId), { recursive: true })
+  writeFileSync(tabPath(videoId, instrument), JSON.stringify(data, null, 2))
 }
 
 export function loadSongs(): Song[] {

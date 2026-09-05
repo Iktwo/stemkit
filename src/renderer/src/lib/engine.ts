@@ -47,10 +47,13 @@ function decodeWavFast(raw: Uint8Array, ctx: AudioContext): AudioBuffer | null {
   const channels = fmt.channels
   const sampleRate = fmt.sampleRate
 
+  const byteOffset = raw.byteOffset + dataOffset
+
   // Case 1: 32-bit float stereo (standard BS-RoFormer output)
   if (fmt.format === 3 && fmt.bitsPerSample === 32 && channels === 2) {
+    if (byteOffset % 4 !== 0) return null
     const numFrames = Math.floor(dataLength / 8)
-    const floatView = new Float32Array(raw.buffer, raw.byteOffset + dataOffset, numFrames * 2)
+    const floatView = new Float32Array(raw.buffer, byteOffset, numFrames * 2)
     const audioBuf = ctx.createBuffer(2, numFrames, sampleRate)
     const left = audioBuf.getChannelData(0)
     const right = audioBuf.getChannelData(1)
@@ -63,8 +66,9 @@ function decodeWavFast(raw: Uint8Array, ctx: AudioContext): AudioBuffer | null {
 
   // Case 2: 32-bit float mono
   if (fmt.format === 3 && fmt.bitsPerSample === 32 && channels === 1) {
+    if (byteOffset % 4 !== 0) return null
     const numFrames = Math.floor(dataLength / 4)
-    const floatView = new Float32Array(raw.buffer, raw.byteOffset + dataOffset, numFrames)
+    const floatView = new Float32Array(raw.buffer, byteOffset, numFrames)
     const audioBuf = ctx.createBuffer(1, numFrames, sampleRate)
     audioBuf.getChannelData(0).set(floatView)
     return audioBuf
@@ -72,8 +76,9 @@ function decodeWavFast(raw: Uint8Array, ctx: AudioContext): AudioBuffer | null {
 
   // Case 3: 16-bit PCM stereo
   if (fmt.format === 1 && fmt.bitsPerSample === 16 && channels === 2) {
+    if (byteOffset % 2 !== 0) return null
     const numFrames = Math.floor(dataLength / 4)
-    const intView = new Int16Array(raw.buffer, raw.byteOffset + dataOffset, numFrames * 2)
+    const intView = new Int16Array(raw.buffer, byteOffset, numFrames * 2)
     const audioBuf = ctx.createBuffer(2, numFrames, sampleRate)
     const left = audioBuf.getChannelData(0)
     const right = audioBuf.getChannelData(1)
@@ -86,8 +91,9 @@ function decodeWavFast(raw: Uint8Array, ctx: AudioContext): AudioBuffer | null {
 
   // Case 4: 16-bit PCM mono
   if (fmt.format === 1 && fmt.bitsPerSample === 16 && channels === 1) {
+    if (byteOffset % 2 !== 0) return null
     const numFrames = Math.floor(dataLength / 2)
-    const intView = new Int16Array(raw.buffer, raw.byteOffset + dataOffset, numFrames)
+    const intView = new Int16Array(raw.buffer, byteOffset, numFrames)
     const audioBuf = ctx.createBuffer(1, numFrames, sampleRate)
     const ch = audioBuf.getChannelData(0)
     for (let i = 0; i < numFrames; i++) {
@@ -100,8 +106,7 @@ function decodeWavFast(raw: Uint8Array, ctx: AudioContext): AudioBuffer | null {
 }
 
 export async function decodePayload(
-  payload: Record<string, Uint8Array>,
-  isCancelled?: () => boolean
+  payload: Record<string, Uint8Array>
 ): Promise<BufferMap> {
   const ctx = engine.ensureCtx()
   if (ctx.state === 'suspended') {
@@ -113,7 +118,6 @@ export async function decodePayload(
   // Decode all stems concurrently
   await Promise.all(
     ids.map(async (id) => {
-      if (isCancelled && isCancelled()) return
       const raw = payload[id]
       if (!raw || raw.byteLength === 0) return
 
@@ -127,8 +131,6 @@ export async function decodePayload(
       } catch (err) {
         console.warn(`Fast WAV decode failed for ${id}, using fallback:`, err)
       }
-
-      if (isCancelled && isCancelled()) return
 
       // Fallback path: standard Web Audio decodeAudioData
       const ab = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer

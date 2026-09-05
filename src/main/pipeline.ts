@@ -7,7 +7,10 @@ import {
   venvPython,
   venvYtDlp,
   separateScript,
+  transcribeScript,
+  tabScript,
   ensureGpuEngine,
+  ensureTabEngineDeps,
   getStatus,
   ytDlpRuntimeArgs
 } from './env'
@@ -20,9 +23,13 @@ import {
   mixWavPath,
   rawDownloadPath,
   upsertSong,
-  loadSongs
+  loadSongs,
+  lyricsPath,
+  loadLyrics,
+  tabPath,
+  loadTabs
 } from './library'
-import { MODEL_EXTENDED, type JobEvent, type JobStage } from '../shared/types'
+import { MODEL_EXTENDED, type JobEvent, type JobStage, type KaraokeData, type GuitarTabData } from '../shared/types'
 import { parseVideoId } from '../shared/url'
 import { cacheThumbnail } from './thumbs'
 
@@ -255,8 +262,18 @@ async function executeJob(job: ActiveJob, url: string, stems?: string[]): Promis
     if (job.cancelled || !jobs.has(videoId)) return
     if (scriptError) bail(scriptError)
 
-    const finalStems = producedStems ?? []
+    const finalStems: string[] = producedStems ?? []
     if (!stemsPresent(videoId, finalStems)) bail('Separation finished but stem files are missing')
+
+    if (finalStems.includes('vocals')) {
+      progress(job, 'finalize', 40, 'Transcribing synchronized karaoke lyrics…')
+      try {
+        await transcribeLyrics(videoId, 'large-v3-turbo')
+      } catch (err) {
+        console.warn(`Auto lyric transcription error for ${videoId} (non-fatal):`, err)
+      }
+    }
+    if (job.cancelled || !jobs.has(videoId)) return
 
     progress(job, 'finalize', 100, 'Adding to library')
     const took = Math.round((Date.now() - startedAt) / 1000)
@@ -530,3 +547,239 @@ export function cancelJob(videoId?: string): void {
 export function isBusy(): boolean {
   return jobs.size > 0
 }
+
+const activeTranscriptions = new Map<string, Promise<KaraokeData>>()
+
+export function sendLyricsProgress(videoId: string, pct: number, message?: string): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send('lyrics:progress', { videoId, pct, message })
+  }
+}
+
+export async function transcribeLyrics(
+  videoId: string,
+  model = 'large-v3-turbo',
+  force = false
+): Promise<KaraokeData> {
+  const existing = loadLyrics(videoId)
+  if (existing && !force) {
+    return existing
+  }
+
+  const existingInFlight = activeTranscriptions.get(videoId)
+  if (existingInFlight) {
+    return existingInFlight
+  }
+
+  const vocalPath = join(stemsDir(videoId), 'vocals.wav')
+  if (!existsSync(vocalPath)) {
+    throw new Error('Vocals stem not found. Please split the stems for this song first.')
+  }
+
+  const outPath = lyricsPath(videoId)
+  const settings = loadSettings()
+  const useGpu = settings.gpuSplit && process.platform === 'win32'
+  const deviceArg = process.platform === 'win32' ? (useGpu ? 'cuda' : 'cpu') : 'auto'
+
+  const task = new Promise<KaraokeData>((resolve, reject) => {
+    sendLyricsProgress(videoId, 0, 'Starting vocal transcription…')
+
+    const child = spawn(
+      venvPython(),
+      [
+        transcribeScript(),
+        '--input',
+        vocalPath,
+        '--out',
+        outPath,
+        '--model',
+        model,
+        '--device',
+        deviceArg
+      ],
+      { env: { ...process.env } }
+    )
+
+    let scriptError: string | null = null
+
+    if (child.stdout) {
+      const rl = createInterface({ input: child.stdout })
+      rl.on('line', (line) => {
+        try {
+          const parsed = JSON.parse(line)
+          if (parsed.type === 'progress') {
+            sendLyricsProgress(videoId, Number(parsed.pct ?? 0), parsed.message)
+          } else if (parsed.type === 'error') {
+            scriptError = String(parsed.message)
+          }
+        } catch {}
+      })
+    }
+
+    let stderrTail = ''
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderrTail = (stderrTail + chunk.toString()).slice(-2000)
+    })
+
+    child.on('error', (err) => {
+      activeTranscriptions.delete(videoId)
+      reject(err)
+    })
+
+    child.on('close', (code) => {
+      activeTranscriptions.delete(videoId)
+      if (code === 0) {
+        const loaded = loadLyrics(videoId)
+        if (loaded) {
+          sendLyricsProgress(videoId, 100, 'Lyrics ready')
+          return resolve(loaded)
+        }
+        return reject(new Error('Transcription finished but lyrics file was not created.'))
+      }
+      reject(
+        new Error(
+          scriptError || `Transcription failed with exit code ${code}: ${stderrTail.slice(0, 300)}`
+        )
+      )
+    })
+  })
+
+  activeTranscriptions.set(videoId, task)
+  return task
+}
+
+const activeTabTranscriptions = new Map<string, Promise<GuitarTabData>>()
+
+export function sendTabProgress(
+  videoId: string,
+  pct: number,
+  message?: string,
+  instrument: 'guitar' | 'bass' = 'guitar'
+): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send('tab:progress', { videoId, pct, message, instrument })
+  }
+}
+
+export async function transcribeGuitarTab(
+  videoId: string,
+  tuning = 'standard',
+  position = 'auto',
+  sensitivity = 'clean',
+  mode = 'chord',
+  voicing = 'standard',
+  force = false,
+  instrument: 'guitar' | 'bass' = 'guitar'
+): Promise<GuitarTabData> {
+  const existing = loadTabs(videoId, instrument)
+  if (existing && !force) {
+    return existing
+  }
+
+  const flightKey = `${videoId}_${instrument}`
+  const existingInFlight = activeTabTranscriptions.get(flightKey)
+  if (existingInFlight) {
+    return existingInFlight
+  }
+
+  const stemFilename = instrument === 'bass' ? 'bass.wav' : 'guitar.wav'
+  const audioPath = join(stemsDir(videoId), stemFilename)
+  if (!existsSync(audioPath)) {
+    throw new Error(
+      `${instrument === 'bass' ? 'Bass' : 'Guitar'} stem not found. Please reprocess this song with the ${instrument} stem selected.`
+    )
+  }
+
+  const outPath = tabPath(videoId, instrument)
+  const settings = loadSettings()
+  const useGpu = settings.gpuSplit && process.platform === 'win32'
+  const deviceArg = process.platform === 'win32' ? (useGpu ? 'cuda' : 'cpu') : 'auto'
+
+  const task = (async () => {
+    const instLabel = instrument === 'bass' ? 'bass' : 'guitar'
+    sendTabProgress(videoId, 0, `Checking ${instLabel} tab engine dependencies…`, instrument)
+    await ensureTabEngineDeps()
+
+    return new Promise<GuitarTabData>((resolve, reject) => {
+      sendTabProgress(videoId, 5, `Starting ${instLabel} transcription…`, instrument)
+
+      const child = spawn(
+        venvPython(),
+        [
+          tabScript(),
+          '--input',
+          audioPath,
+          '--out',
+          outPath,
+          '--instrument',
+          instrument,
+          '--mode',
+          instrument === 'bass' ? 'note' : mode,
+          '--voicing',
+          voicing,
+          '--tuning',
+          tuning,
+          '--position',
+          position,
+          '--sensitivity',
+          sensitivity,
+          '--device',
+          deviceArg
+        ],
+        { env: { ...process.env } }
+      )
+
+      let scriptError: string | null = null
+
+      if (child.stdout) {
+        const rl = createInterface({ input: child.stdout })
+        rl.on('line', (line) => {
+          try {
+            const parsed = JSON.parse(line)
+            if (parsed.type === 'progress') {
+              sendTabProgress(videoId, Number(parsed.pct ?? 0), parsed.message, instrument)
+            } else if (parsed.type === 'error') {
+              scriptError = String(parsed.message)
+            }
+          } catch {}
+        })
+      }
+
+      let stderrTail = ''
+      child.stderr?.on('data', (chunk: Buffer) => {
+        stderrTail = (stderrTail + chunk.toString()).slice(-2000)
+      })
+
+      child.on('error', (err) => {
+        activeTabTranscriptions.delete(flightKey)
+        reject(err)
+      })
+
+      child.on('close', (code) => {
+        activeTabTranscriptions.delete(flightKey)
+        if (code === 0) {
+          const loaded = loadTabs(videoId, instrument)
+          if (loaded) {
+            sendTabProgress(
+              videoId,
+              100,
+              `${instrument === 'bass' ? 'Bass' : 'Guitar'} tablature ready`,
+              instrument
+            )
+            return resolve(loaded)
+          }
+          return reject(new Error('Transcription finished but tabs file was not created.'))
+        }
+        reject(
+          new Error(
+            scriptError || `Tab transcription failed with exit code ${code}: ${stderrTail.slice(0, 300)}`
+          )
+        )
+      })
+    })
+  })()
+
+  activeTabTranscriptions.set(flightKey, task)
+  return task
+}
+

@@ -6,7 +6,9 @@ import { fmtTime } from '../lib/format'
 import { Thumb } from '../lib/thumbs'
 import { StemLane } from './StemLane'
 import { Transport } from './Transport'
-import { DownloadIcon, ExternalIcon, RefreshIcon, XIcon } from './Icons'
+import { DownloadIcon, ExternalIcon, RefreshIcon, XIcon, MicIcon, GuitarIcon, BassIcon } from './Icons'
+import { KaraokeStage } from './KaraokeStage'
+import { TabStage } from './TabStage'
 
 export { clearBufferCache }
 
@@ -43,13 +45,22 @@ export function Player({ song, settings, onReprocess }: Props): React.ReactEleme
 
   // Reprocess modal state
   const [showReprocess, setShowReprocess] = useState(false)
+  const [showKaraoke, setShowKaraoke] = useState(false)
+  const [showTabs, setShowTabs] = useState(false)
+  const [tabInstrument, setTabInstrument] = useState<'guitar' | 'bass'>('guitar')
   const [reprocessStems, setReprocessStems] = useState<Set<StemId>>(
     new Set<StemId>((song.stems as StemId[]) || (PREFERRED_ORDER as StemId[]))
   )
 
+  const openTabs = (inst: 'guitar' | 'bass'): void => {
+    setTabInstrument(inst)
+    setShowTabs(true)
+  }
+
   // Reset reprocess state when switching songs
   useEffect(() => {
     setShowReprocess(false)
+    setShowTabs(false)
     setReprocessStems(new Set<StemId>((song.stems as StemId[]) || (PREFERRED_ORDER as StemId[])))
   }, [song.videoId, song.stems])
 
@@ -151,31 +162,67 @@ export function Player({ song, settings, onReprocess }: Props): React.ReactEleme
               </div>
             </div>
 
-            <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
-              <button
-                onClick={() => setShowReprocess(true)}
-                className="no-drag glass rounded-xl px-4 py-2.5 text-[13px] font-medium text-olive-200 hover:text-white hover:bg-olive-500/20 border border-olive-400/30 transition-all flex items-center gap-2 cursor-pointer"
-                title="Reprocess this track with SOTA BS-RoFormer or new stems"
-              >
-                <RefreshIcon className="w-3.5 h-3.5" />
-                Reprocess Stems
-              </button>
-              <button
-                onClick={exportAllStems}
-                disabled={decoding || !!decodeError}
-                className="no-drag glass rounded-xl px-4 py-2.5 text-[13px] font-medium text-white/70 hover:text-white hover:bg-white/10 transition-colors flex items-center gap-2 disabled:opacity-40 cursor-pointer"
-              >
-                <DownloadIcon className="w-4 h-4" />
-                Export everything
-              </button>
-              <button
-                onClick={() => window.stemkit.openExternal(youtubeUrl)}
-                className="no-drag glass rounded-xl px-4 py-2.5 text-[13px] font-medium text-white/70 hover:text-white hover:bg-white/10 transition-colors flex items-center gap-2 cursor-pointer"
-                title="Open original video on YouTube"
-              >
-                <ExternalIcon className="w-3.5 h-3.5" />
-                YouTube
-              </button>
+            <div className="flex flex-col gap-2 shrink-0 items-start md:items-end w-full md:w-auto">
+              {/* Primary Experience Modes */}
+              <div className="flex items-center gap-2 flex-wrap">
+                {(stemIds.includes('guitar') || !song.stems || song.stems.includes('guitar')) && (
+                  <button
+                    onClick={() => openTabs('guitar')}
+                    className="no-drag rounded-xl px-3.5 py-2 text-xs font-semibold text-black bg-gradient-to-r from-emerald-400 to-teal-400 hover:from-emerald-300 hover:to-teal-300 transition-all shadow-md shadow-emerald-400/20 flex items-center gap-1.5 cursor-pointer"
+                    title="Open Guitar Tabs with interactive fretboard, synchronized player & export"
+                  >
+                    <GuitarIcon className="w-3.5 h-3.5 text-black" />
+                    <span>Guitar Tabs</span>
+                  </button>
+                )}
+                {(stemIds.includes('bass') || !song.stems || song.stems.includes('bass')) && (
+                  <button
+                    onClick={() => openTabs('bass')}
+                    className="no-drag rounded-xl px-3.5 py-2 text-xs font-semibold text-black bg-gradient-to-r from-amber-400 to-orange-400 hover:from-amber-300 hover:to-orange-300 transition-all shadow-md shadow-amber-400/20 flex items-center gap-1.5 cursor-pointer"
+                    title="Open Bass Tabs with interactive 4/5-string fretboard, MIDI synth & export"
+                  >
+                    <BassIcon className="w-3.5 h-3.5 text-black" />
+                    <span>Bass Tabs</span>
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowKaraoke(true)}
+                  className="no-drag rounded-xl px-3.5 py-2 text-xs font-semibold text-black bg-gradient-to-r from-purple-300 to-pink-300 hover:from-purple-200 hover:to-pink-200 transition-all shadow-md shadow-purple-400/20 flex items-center gap-1.5 cursor-pointer"
+                  title="Open Karaoke Stage with animated word-synced lyrics"
+                >
+                  <MicIcon className="w-3.5 h-3.5 text-black" />
+                  <span>Karaoke Mode</span>
+                </button>
+              </div>
+
+              {/* Actions & Utilities */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  onClick={() => setShowReprocess(true)}
+                  className="no-drag glass rounded-xl px-3 py-1.5 text-xs font-medium text-olive-200 hover:text-white hover:bg-olive-500/20 border border-olive-400/30 transition-all flex items-center gap-1.5 cursor-pointer"
+                  title="Reprocess this track with SOTA BS-RoFormer or new stems"
+                >
+                  <RefreshIcon className="w-3.5 h-3.5" />
+                  <span>Reprocess</span>
+                </button>
+                <button
+                  onClick={exportAllStems}
+                  disabled={decoding || !!decodeError}
+                  className="no-drag glass rounded-xl px-3 py-1.5 text-xs font-medium text-white/70 hover:text-white hover:bg-white/10 transition-colors flex items-center gap-1.5 disabled:opacity-40 cursor-pointer"
+                  title="Export all separated stem audio files"
+                >
+                  <DownloadIcon className="w-3.5 h-3.5" />
+                  <span>Export All</span>
+                </button>
+                <button
+                  onClick={() => window.stemkit.openExternal(youtubeUrl)}
+                  className="no-drag glass rounded-xl px-2.5 py-1.5 text-xs font-medium text-white/60 hover:text-white hover:bg-white/10 transition-colors flex items-center gap-1.5 cursor-pointer"
+                  title="Open original video on YouTube"
+                >
+                  <ExternalIcon className="w-3 h-3 text-red-400" />
+                  <span className="text-[11px]">YouTube</span>
+                </button>
+              </div>
             </div>
           </div>
 
@@ -222,6 +269,11 @@ export function Player({ song, settings, onReprocess }: Props): React.ReactEleme
                 onVolume={(v) => setStemVolume(meta.id, v)}
                 onSeek={seekTo}
                 onExport={() => exportStem(meta.id)}
+                onOpenTabs={
+                  meta.id === 'guitar' || meta.id === 'bass'
+                    ? () => openTabs(meta.id as 'guitar' | 'bass')
+                    : undefined
+                }
                 playing={playing}
               />
             ))}
@@ -336,6 +388,21 @@ export function Player({ song, settings, onReprocess }: Props): React.ReactEleme
             </div>
           </div>
         </div>
+      )}
+
+      {showKaraoke && (
+        <KaraokeStage
+          song={song}
+          onClose={() => setShowKaraoke(false)}
+        />
+      )}
+
+      {showTabs && (
+        <TabStage
+          song={song}
+          instrument={tabInstrument}
+          onClose={() => setShowTabs(false)}
+        />
       )}
     </div>
   )

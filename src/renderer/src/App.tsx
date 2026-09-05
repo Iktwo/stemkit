@@ -261,6 +261,7 @@ function MainApp(): React.ReactElement {
   } else if (activeSong) {
     main = (
       <Player
+        key={activeSong.videoId}
         song={activeSong}
         settings={settings ?? undefined}
         onReprocess={handleReprocess}
@@ -297,6 +298,7 @@ function MainApp(): React.ReactElement {
         pending={pendingMap}
         update={update ?? undefined}
         appVersion={appVersion}
+        status={status}
         onSelect={(id) => setActiveId(id)}
         onDelete={(id) => void deleteSong(id)}
         onAdd={() => setActiveId(null)}
@@ -307,6 +309,18 @@ function MainApp(): React.ReactElement {
         }}
       />
       <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden relative">
+        {/* Standard Window Decorator / Drag Bar with App Name */}
+        <header className="drag-region h-10 shrink-0 flex items-center justify-between px-6 border-b border-white/[0.06] bg-black/20 select-none z-20">
+          <div className="w-16" />
+          <div className="flex items-center gap-2 pointer-events-none select-none">
+            <LogoMark className="w-3.5 h-3.5 text-olive-400" />
+            <span className="text-xs font-semibold tracking-tight text-white/70">
+              StemKit
+            </span>
+          </div>
+          <div className="w-16" />
+        </header>
+
         <main className="flex-1 min-w-0 overflow-hidden relative">
           {main}
         </main>

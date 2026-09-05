@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import type { Song } from '../../../shared/types'
+import type { Song, EnvStatus } from '../../../shared/types'
 import { fmtTime } from '../lib/format'
 import { Thumb } from '../lib/thumbs'
 import { TrashIcon, PlusIcon, GearIcon } from './Icons'
@@ -12,6 +12,7 @@ interface Props {
   pending?: Record<string, { label: string; error?: boolean }>
   update?: { status: string; version?: string; pct?: number }
   appVersion?: string
+  status?: EnvStatus | null
   onSelect: (videoId: string) => void
   onDelete: (videoId: string) => void
   onAdd: () => void
@@ -27,6 +28,7 @@ export function Sidebar({
   pending = {},
   update,
   appVersion,
+  status,
   onSelect,
   onDelete,
   onAdd,
@@ -44,10 +46,10 @@ export function Sidebar({
   return (
     <aside className="w-[280px] shrink-0 h-full flex flex-col border-r border-white/[0.08] bg-black/30 backdrop-blur-xl select-none">
       {/* Window drag header without branding badge */}
-      <div className="drag-region h-10 shrink-0" />
+      <div className="drag-region h-10 shrink-0 border-b border-white/[0.06]" />
 
       {/* Top Action: New Split */}
-      <div className="px-3 pb-3">
+      <div className="px-3 pt-3 pb-3">
         <button
           onClick={onAdd}
           className={`no-drag w-full flex items-center justify-center gap-2 rounded-xl py-2.5 px-4 text-xs font-semibold transition-all shadow-sm ${
@@ -207,10 +209,16 @@ export function Sidebar({
         )}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-            <span className="text-[11px] text-white/40 font-medium">
-              SOTA BS-RoFormer Engine
-            </span>
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                status && !status.ready ? 'bg-rose-500' : 'bg-emerald-400'
+              }`}
+            />
+            {status && !status.ready && (
+              <span className="text-[11px] text-rose-400 font-medium">
+                Error
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <span className="text-[10px] text-white/25 font-mono">
