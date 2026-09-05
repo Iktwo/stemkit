@@ -1,32 +1,55 @@
+"""
+StemKit tablature engine.
+
+Turns an isolated guitar / bass stem (or a MIDI file) into playable tablature:
+
+  * beat grid   - tracked on the full mix (drums make this robust), so bars
+                  never drift the way a single fixed BPM does
+  * lead notes  - monophonic f0 tracking (CREPE on GPU/CPU, pYIN fallback)
+                  + onset detection + legato segmentation. Used for bass and
+                  single-note guitar lines; far more reliable in the low
+                  register than a general polyphonic model
+  * poly notes  - Spotify Basic Pitch (ONNX runtime) refined with the f0
+                  track (octave-error repair) and a harmonic ghost filter
+  * chords      - beat-synchronous chroma + Viterbi chord decoding, strummed
+                  at the onsets that are actually in the audio
+  * fingering   - Viterbi over (string, fret) candidates with hand-position
+                  inertia, so the tab stays in one box instead of jumping
+  * midi import - any .mid track becomes a tab through the same solver
+
+Progress and results are emitted as JSON lines on stdout.
+"""
+
 import argparse
 import itertools
 import json
+import math
 import os
 import sys
-import time
 import warnings
 import wave
 
-# Prevent OpenMP / thread issues on interpreter shutdown
-os.environ["OMP_NUM_THREADS"] = "1"
+os.environ.setdefault("OMP_NUM_THREADS", "2")
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
 
-# Standard E tuning from high to low (String 1 to 6)
-# String 1: E4 (64), String 2: B3 (59), String 3: G3 (55), String 4: D3 (50), String 5: A2 (45), String 6: E2 (40)
-DEFAULT_TUNING_PITCHES = [64, 59, 55, 50, 45, 40]
-DEFAULT_TUNING_NAMES = ["e", "B", "G", "D", "A", "E"]
+# ---------------------------------------------------------------------------
+# tunings / presets
+# ---------------------------------------------------------------------------
 
-TUNING_PRESETS = {
+# high string first (string 1) -> low string last
+GUITAR_TUNINGS = {
     "standard": ([64, 59, 55, 50, 45, 40], ["e", "B", "G", "D", "A", "E"]),
     "drop_d": ([64, 59, 55, 50, 45, 38], ["e", "B", "G", "D", "A", "D"]),
     "half_step_down": ([63, 58, 54, 49, 44, 39], ["eb", "Bb", "Gb", "Db", "Ab", "Eb"]),
     "d_standard": ([62, 57, 53, 48, 43, 38], ["d", "A", "F", "C", "G", "D"]),
+    "drop_c": ([62, 57, 53, 48, 43, 36], ["d", "A", "F", "C", "G", "C"]),
     "open_d": ([62, 57, 54, 50, 45, 38], ["d", "A", "F#", "D", "A", "D"]),
     "open_g": ([62, 59, 55, 50, 43, 38], ["d", "B", "G", "D", "G", "D"]),
 }
 
-BASS_TUNING_PRESETS = {
+BASS_TUNINGS = {
     "standard": ([43, 38, 33, 28], ["G", "D", "A", "E"]),
     "drop_d": ([43, 38, 33, 26], ["G", "D", "A", "D"]),
     "half_step_down": ([42, 37, 32, 27], ["Gb", "Db", "Ab", "Eb"]),
@@ -35,17 +58,17 @@ BASS_TUNING_PRESETS = {
     "5_string_drop_a": ([43, 38, 33, 28, 21], ["G", "D", "A", "E", "A"]),
 }
 
-POSITION_PRESETS = {
-    "auto": None,
-    "open": 0,    # Frets 0 to 4
-    "mid": 5,     # Frets 5 to 9
-    "high": 9,    # Frets 9 to 14
-    "octave": 12  # Frets 12 to 16
-}
+POSITION_PRESETS = {"auto": None, "open": 0, "mid": 5, "high": 9, "octave": 12}
+
+NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
 
 def emit(**kwargs):
     print(json.dumps(kwargs), flush=True)
+
+
+def progress(pct, message):
+    emit(type="progress", pct=int(pct), message=message)
 
 
 def fail(message):
@@ -53,852 +76,1482 @@ def fail(message):
     os._exit(1)
 
 
-def get_wav_duration(path):
+def midi_name(p):
+    return f"{NOTE_NAMES[int(p) % 12]}{int(p) // 12 - 1}"
+
+
+# ---------------------------------------------------------------------------
+# audio helpers
+# ---------------------------------------------------------------------------
+
+def wav_duration(path):
     try:
         import soundfile as sf
-        info = sf.info(path)
-        return float(info.duration)
+        return float(sf.info(path).duration)
     except Exception:
         try:
             with wave.open(path, "rb") as w:
-                frames = w.getnframes()
-                rate = w.getframerate()
-                return frames / float(rate)
+                return w.getnframes() / float(w.getframerate())
         except Exception:
             return 0.0
 
 
-def filter_harmonics_and_clean(raw_notes, min_dur=0.08):
-    """
-    Filters acoustic overtone artifacts and merges adjacent same-pitch fragments.
-    In distorted/electric guitar, strong harmonics at +12 (octave), +19 (octave+fifth),
-    and +24 (2 octaves) often trick AMT models into predicting high ghost notes.
-    """
-    if not raw_notes:
-        return []
-
-    # 1. Sort chronologically by start time
-    sorted_notes = sorted(raw_notes, key=lambda n: (n[0], n[2]))
-
-    # 2. Filter out microscopic blips
-    valid = [n for n in sorted_notes if (n[1] - n[0]) >= min_dur]
-
-    # 3. Suppress overtone ghost notes that overlap with a stronger fundamental
-    HARMONIC_INTERVALS = {12, 19, 24, 28}
-    clean = []
-    for n in valid:
-        is_harmonic = False
-        n_pitch = int(round(n[2]))
-        for other in valid:
-            if other is n:
-                continue
-            other_pitch = int(round(other[2]))
-            interval = n_pitch - other_pitch
-            if interval in HARMONIC_INTERVALS:
-                overlap = min(n[1], other[1]) - max(n[0], other[0])
-                if overlap > 0.035:
-                    # If other note is lower pitch and of comparable/greater amplitude
-                    if n[3] <= other[3] * 1.25:
-                        is_harmonic = True
-                        break
-        if not is_harmonic:
-            clean.append(n)
-
-    # 4. Merge rapid sequential fragments of the exact same pitch (gap < 45ms)
-    clean.sort(key=lambda x: (int(round(x[2])), x[0]))
-    merged = []
-    for n in clean:
-        n_pitch = int(round(n[2]))
-        if merged and int(round(merged[-1][2])) == n_pitch and (n[0] - merged[-1][1]) <= 0.045:
-            # Extend note duration
-            merged[-1] = (merged[-1][0], max(merged[-1][1], n[1]), n[2], max(merged[-1][3], n[3]))
-        else:
-            merged.append(n)
-
-    # Final sort chronologically
-    merged.sort(key=lambda x: (x[0], x[2]))
-    return merged
-
-
-def get_candidates(pitch, tuning_pitches, max_fret=22):
-    cands = []
-    for s_idx, open_p in enumerate(tuning_pitches):
-        f = pitch - open_p
-        if 0 <= f <= max_fret:
-            cands.append((s_idx + 1, f))  # 1-indexed: 1 = high E, 6 = low E
-    return cands
-
-
-def solve_position_anchored_tab(note_events, tuning_pitches=DEFAULT_TUNING_PITCHES, forced_position=None, max_fret=22):
-    """
-    Position-anchored guitar fingering solver.
-    Human guitarists play within recognizable 4-fret hand positions (boxes).
-    This solver determines the phrase hand anchor and keeps notes strictly within that box,
-    enforcing human hand span limits (<= 4 frets) and eliminating erratic neck jumping.
-    """
-    if not note_events:
-        return []
-
-    POSITIONS = [0, 2, 5, 7, 9, 12, 14]
-
-    structured = []
-    for n in note_events:
-        pitch = int(round(n[2]))
-        cands = get_candidates(pitch, tuning_pitches, max_fret)
-        if not cands:
-            continue
-        structured.append({
-            "start": round(float(n[0]), 3),
-            "end": round(float(n[1]), 3),
-            "pitch": pitch,
-            "amplitude": round(float(n[3]), 3)
-        })
-
-    if not structured:
-        return []
-
-    # 1. Cluster notes into time slices (chords / polyphony within 35ms)
-    slices = []
-    curr_slice = [structured[0]]
-    for n in structured[1:]:
-        if n["start"] - curr_slice[0]["start"] <= 0.035:
-            curr_slice.append(n)
-        else:
-            slices.append(curr_slice)
-            curr_slice = [n]
-    if curr_slice:
-        slices.append(curr_slice)
-
-    # 2. Partition slices into musical phrases (separated by pauses >= 0.8s)
-    phrases = []
-    curr_phrase = [slices[0]]
-    for s in slices[1:]:
-        if s[0]["start"] - curr_phrase[-1][-1]["end"] >= 0.8:
-            phrases.append(curr_phrase)
-            curr_phrase = [s]
-        else:
-            curr_phrase.append(s)
-    if curr_phrase:
-        phrases.append(curr_phrase)
-
-    assigned_notes = []
-    prev_P = None
-    prev_single_note = None
-
-    for phrase in phrases:
-        phrase_notes = [n for s in phrase for n in s]
-
-        if forced_position is not None:
-            best_P = forced_position
-        else:
-            # Score candidate positions P
-            pos_scores = {}
-            for P in POSITIONS:
-                # Natural bias toward lower/open positions (frets 0-4)
-                score = P * 0.4
-                # Position inertia: strongly discourage hopping between positions for nearby phrases
-                if prev_P is not None:
-                    score += abs(P - prev_P) * 2.0
-                for n in phrase_notes:
-                    cands = get_candidates(n["pitch"], tuning_pitches, max_fret)
-                    best_dist = float("inf")
-                    for s, f in cands:
-                        if f == 0:
-                            d = 0.2  # Open string is always accessible
-                        elif P <= f <= P + 4:
-                            d = 0.0  # In-position box
-                        elif f < P:
-                            d = (P - f) * 2.5
-                        else:
-                            d = (f - (P + 4)) * 3.5
-                        if d < best_dist:
-                            best_dist = d
-                    score += best_dist
-                pos_scores[P] = score
-
-            best_P = min(pos_scores, key=pos_scores.get)
-            prev_P = best_P
-
-        # Assign fingerings within the phrase anchored to best_P
-        for s in phrase:
-            if len(s) == 1:
-                n = s[0]
-                cands = get_candidates(n["pitch"], tuning_pitches, max_fret)
-                if not cands:
-                    continue
-
-                def cand_rank(c):
-                    s_num, f = c
-                    in_box = (f == 0) or (best_P <= f <= best_P + 4)
-                    dist = 0.0 if in_box else abs(f - (best_P + 2))
-                    # Penalize high frets when in lower positions
-                    high_penalty = max(0, f - 5) * 3.0 if best_P <= 2 else 0.0
-                    open_bonus = -0.5 if (f == 0 and best_P <= 2) else 0.0
-                    # Hand continuity: encourage adjacent frets / strings from immediately previous note
-                    trans_cost = 0.0
-                    if prev_single_note is not None:
-                        ps, pf = prev_single_note
-                        if pf > 0 and f > 0:
-                            trans_cost = abs(f - pf) * 0.6 + abs(s_num - ps) * 0.3
-                    return (0 if in_box else 1, dist + high_penalty + open_bonus + trans_cost, s_num)
-
-                cands.sort(key=cand_rank)
-                chosen_s, chosen_f = cands[0]
-                prev_single_note = (chosen_s, chosen_f)
-                assigned_notes.append({
-                    "string": chosen_s,
-                    "fret": chosen_f,
-                    "pitch": n["pitch"],
-                    "start": n["start"],
-                    "end": n["end"],
-                    "amplitude": n["amplitude"],
-                    "pos": best_P
-                })
-            else:
-                # Multi-note chord: ensure strictly playable hand span and unique strings
-                note_cands = [get_candidates(n["pitch"], tuning_pitches, max_fret) for n in s]
-                valid_combos = []
-                for combo in itertools.product(*note_cands):
-                    strings = [c[0] for c in combo]
-                    if len(strings) != len(set(strings)):
-                        continue  # Two notes on same string is impossible
-                    frets = [c[1] for c in combo]
-                    fretted = [f for f in frets if f > 0]
-                    if fretted:
-                        span = max(fretted) - min(fretted)
-                        if span > 4:
-                            continue  # Hand span exceeds 4 frets: impossible
-                        hand_pos = min(fretted)
-                        pos_shift = abs(hand_pos - best_P)
-                        high_fret_penalty = sum(max(0, f - 5) * 3.0 for f in fretted) if best_P <= 2 else 0.0
-                        cost = span * 3.0 + pos_shift * 2.0 + high_fret_penalty
-                    else:
-                        cost = 0.0
-                    valid_combos.append((cost, combo))
-
-                if valid_combos:
-                    valid_combos.sort(key=lambda x: x[0])
-                    best_combo = valid_combos[0][1]
-                    for n, (s_num, f_num) in zip(s, best_combo):
-                        assigned_notes.append({
-                            "string": s_num,
-                            "fret": f_num,
-                            "pitch": n["pitch"],
-                            "start": n["start"],
-                            "end": n["end"],
-                            "amplitude": n["amplitude"],
-                            "pos": best_P
-                        })
-                else:
-                    # If multi-note combo is unplayable within 4 frets (e.g. overtone/bleed):
-                    # Keep the strongest note (fundamental/melody) and discard impossible ghost note
-                    sorted_by_amp = sorted(s, key=lambda x: x["amplitude"], reverse=True)
-                    strongest = sorted_by_amp[0]
-                    cands = get_candidates(strongest["pitch"], tuning_pitches, max_fret)
-                    if cands:
-                        cands.sort(key=lambda c: (
-                            0 if (c[1] == 0 or abs(c[1] - best_P) <= 4) else 1,
-                            abs(c[1] - best_P)
-                        ))
-                        chosen_s, chosen_f = cands[0]
-                        assigned_notes.append({
-                            "string": chosen_s,
-                            "fret": chosen_f,
-                            "pitch": strongest["pitch"],
-                            "start": strongest["start"],
-                            "end": strongest["end"],
-                            "amplitude": strongest["amplitude"],
-                            "pos": best_P
-                        })
-
-    assigned_notes.sort(key=lambda x: (x["start"], x["string"]))
-    return assigned_notes
-
-
-def generate_quantized_ascii_tab(notes, string_names=DEFAULT_TUNING_NAMES, bpm=120, total_duration=0):
-    """
-    Rhythmically quantizes notes onto a 16th-note musical grid (4 beats per bar,
-    16 subdivisions per measure) and formats clean 2-measure tab blocks.
-    """
+def load_mono(path, target_sr=None):
     import numpy as np
+    import soundfile as sf
 
-    if not notes:
-        return "\n".join(f"{name} |---|" for name in string_names)
-
-    bpm = max(45.0, min(240.0, bpm))
-    beat_dur = 60.0 / bpm
-    bar_dur = beat_dur * 4.0
-    step_dur = beat_dur / 4.0  # 16th-note step
-
-    max_time = max(total_duration, max((n["end"] for n in notes), default=0.0))
-    total_bars = max(1, int(np.ceil(max_time / bar_dur)))
-
-    systems = []
-    STEPS_PER_BAR = 16
-
-    for bar_pair in range(0, total_bars, 2):
-        b1 = bar_pair
-        b2 = bar_pair + 1
-        t_start = b1 * bar_dur
-        t_end = (b2 + 1) * bar_dur
-
-        bar1_notes = [n for n in notes if b1 * bar_dur <= n["start"] < (b1 + 1) * bar_dur]
-        bar2_notes = [n for n in notes if (b1 + 1) * bar_dur <= n["start"] < (b2 + 1) * bar_dur]
-
-        # Build grid for bar 1
-        grid1 = {s: ["-"] * STEPS_PER_BAR for s in range(1, 7)}
-        for n in bar1_notes:
-            rel_t = n["start"] - (b1 * bar_dur)
-            step = int(round(rel_t / step_dur))
-            step = max(0, min(STEPS_PER_BAR - 1, step))
-            grid1[n["string"]][step] = str(n["fret"])
-
-        # Build grid for bar 2
-        grid2 = {s: ["-"] * STEPS_PER_BAR for s in range(1, 7)}
-        for n in bar2_notes:
-            rel_t = n["start"] - ((b1 + 1) * bar_dur)
-            step = int(round(rel_t / step_dur))
-            step = max(0, min(STEPS_PER_BAR - 1, step))
-            grid2[n["string"]][step] = str(n["fret"])
-
-        min_start = int(t_start // 60)
-        sec_start = int(t_start % 60)
-        min_end = int(min(max_time, t_end) // 60)
-        sec_end = int(min(max_time, t_end) % 60)
-        header = f"[{min_start:02d}:{sec_start:02d} - {min_end:02d}:{sec_end:02d}] Bar {b1 + 1} - {min(total_bars, b2 + 1)}"
-
-        lines = [header]
-        for s_idx, s_name in enumerate(string_names):
-            s_num = s_idx + 1
-            b1_str = "".join(grid1[s_num])
-            b2_str = "".join(grid2[s_num])
-            lines.append(f"{s_name:2s} |{b1_str}|{b2_str}|")
-
-        systems.append("\n".join(lines))
-
-    return "\n\n".join(systems)
+    y, sr = sf.read(path, dtype="float32", always_2d=True)
+    y = y.mean(axis=1)
+    if target_sr and sr != target_sr:
+        import librosa
+        y = librosa.resample(y, orig_sr=sr, target_sr=target_sr, res_type="soxr_hq")
+        sr = target_sr
+    return np.ascontiguousarray(y, dtype=np.float32), sr
 
 
-def export_guitar_tab_midi(assigned_notes, out_midi_path, bpm=120, instrument="guitar", tuning_pitches=None):
+def pick_torch_device(requested):
     try:
-        import pretty_midi
-
-        pm = pretty_midi.PrettyMIDI(initial_tempo=bpm)
-        is_bass = (instrument == "bass")
-        program_name = "Electric Bass (finger)" if is_bass else "Acoustic Guitar (steel)"
-        prog = pretty_midi.instrument_name_to_program(program_name)
-
-        num_strings = len(tuning_pitches) if tuning_pitches else (4 if is_bass else 6)
-        label_prefix = "Bass String" if is_bass else "Guitar String"
-        instruments = [
-            pretty_midi.Instrument(program=prog, name=f"{label_prefix} {s}")
-            for s in range(1, num_strings + 1)
-        ]
-
-        for n in assigned_notes:
-            string_idx = max(0, min(num_strings - 1, n["string"] - 1))
-            vel = int(round(max(25, min(127, n.get("amplitude", 0.8) * 127))))
-            note = pretty_midi.Note(
-                velocity=vel,
-                pitch=n["pitch"],
-                start=n["start"],
-                end=max(n["start"] + 0.06, n["end"])
-            )
-            instruments[string_idx].notes.append(note)
-
-        for inst in instruments:
-            if inst.notes:
-                pm.instruments.append(inst)
-
-        pm.write(out_midi_path)
-        return True
-    except Exception as e:
-        warnings.warn(f"Failed to export MIDI: {e}")
-        return False
+        import torch
+    except Exception:
+        return "cpu"
+    if requested == "cpu":
+        return "cpu"
+    if requested == "cuda":
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    if torch.cuda.is_available():
+        return "cuda"
+    if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
 
 
-GUITAR_CHORD_VOICINGS = {
-    # 6 strings: [low E (6), A (5), D (4), G (3), B (2), high e (1)]
-    # -1 means string is not played / muted (x)
-    'C':     [-1, 3, 2, 0, 1, 0],
-    'C#':    [-1, 4, 3, 1, 2, 1],
-    'D':     [-1, -1, 0, 2, 3, 2],
-    'D#':    [-1, -1, 1, 3, 4, 3],
-    'E':     [0, 2, 2, 1, 0, 0],
-    'F':     [1, 3, 3, 2, 1, 1],
-    'F#':    [2, 4, 4, 3, 2, 2],
-    'G':     [3, 2, 0, 0, 0, 3],
-    'G#':    [4, 6, 6, 5, 4, 4],
-    'A':     [-1, 0, 2, 2, 2, 0],
-    'A#':    [-1, 1, 3, 3, 3, 1],
-    'B':     [-1, 2, 4, 4, 4, 2],
-    'Cm':    [-1, 3, 5, 5, 4, 3],
-    'C#m':   [-1, 4, 6, 6, 5, 4],
-    'Dm':    [-1, -1, 0, 2, 3, 1],
-    'D#m':   [-1, -1, 1, 3, 4, 2],
-    'Em':    [0, 2, 2, 0, 0, 0],
-    'Fm':    [1, 3, 3, 1, 1, 1],
-    'F#m':   [2, 4, 4, 2, 2, 2],
-    'Gm':    [3, 5, 5, 3, 3, 3],
-    'G#m':   [4, 6, 6, 4, 4, 4],
-    'Am':    [-1, 0, 2, 2, 1, 0],
-    'A#m':   [-1, 1, 3, 3, 2, 1],
-    'Bm':    [-1, 2, 4, 4, 3, 2],
-    'Dmaj7': [-1, -1, 0, 2, 2, 2],
-    'Cmaj7': [-1, 3, 2, 0, 0, 0],
-    'Fmaj7': [-1, -1, 3, 2, 1, 0],
-    'G7':    [3, 2, 0, 0, 0, 1],
-    'E7':    [0, 2, 0, 1, 0, 0],
-    'A7':    [-1, 0, 2, 0, 2, 0],
-    'D7':    [-1, -1, 0, 2, 1, 2],
-    'B7':    [-1, 2, 1, 2, 0, 2]
-}
+# ---------------------------------------------------------------------------
+# beat grid
+# ---------------------------------------------------------------------------
 
-GUITAR_BARRE_VOICINGS = {
-    'C':   [-1, 3, 5, 5, 5, 3],
-    'C#':  [-1, 4, 6, 6, 6, 4],
-    'D':   [-1, 5, 7, 7, 7, 5],
-    'D#':  [-1, 6, 8, 8, 8, 6],
-    'E':   [0, 2, 2, 1, 0, 0],
-    'F':   [1, 3, 3, 2, 1, 1],
-    'F#':  [2, 4, 4, 3, 2, 2],
-    'G':   [3, 5, 5, 4, 3, 3],
-    'G#':  [4, 6, 6, 5, 4, 4],
-    'A':   [5, 7, 7, 6, 5, 5],
-    'A#':  [6, 8, 8, 7, 6, 6],
-    'B':   [7, 9, 9, 8, 7, 7],
-    'Cm':  [-1, 3, 5, 5, 4, 3],
-    'C#m': [-1, 4, 6, 6, 5, 4],
-    'Dm':  [-1, 5, 7, 7, 6, 5],
-    'D#m': [-1, 6, 8, 8, 7, 6],
-    'Em':  [0, 2, 2, 0, 0, 0],
-    'Fm':  [1, 3, 3, 1, 1, 1],
-    'F#m': [2, 4, 4, 2, 2, 2],
-    'Gm':  [3, 5, 5, 3, 3, 3],
-    'G#m': [4, 6, 6, 4, 4, 4],
-    'Am':  [5, 7, 7, 5, 5, 5],
-    'A#m': [6, 8, 8, 6, 6, 6],
-    'Bm':  [7, 9, 9, 7, 7, 7],
-}
-
-GUITAR_POWER_VOICINGS = {
-    'C':   [-1, 3, 5, 5, -1, -1],
-    'C#':  [-1, 4, 6, 6, -1, -1],
-    'D':   [-1, 5, 7, 7, -1, -1],
-    'D#':  [-1, 6, 8, 8, -1, -1],
-    'E':   [0, 2, 2, -1, -1, -1],
-    'F':   [1, 3, 3, -1, -1, -1],
-    'F#':  [2, 4, 4, -1, -1, -1],
-    'G':   [3, 5, 5, -1, -1, -1],
-    'G#':  [4, 6, 6, -1, -1, -1],
-    'A':   [5, 7, 7, -1, -1, -1],
-    'A#':  [6, 8, 8, -1, -1, -1],
-    'B':   [7, 9, 9, -1, -1, -1],
-    'Cm':  [-1, 3, 5, 5, -1, -1],
-    'C#m': [-1, 4, 6, 6, -1, -1],
-    'Dm':  [-1, 5, 7, 7, -1, -1],
-    'D#m': [-1, 6, 8, 8, -1, -1],
-    'Em':  [0, 2, 2, -1, -1, -1],
-    'Fm':  [1, 3, 3, -1, -1, -1],
-    'F#m': [2, 4, 4, -1, -1, -1],
-    'Gm':  [3, 5, 5, -1, -1, -1],
-    'G#m': [4, 6, 6, -1, -1, -1],
-    'Am':  [5, 7, 7, -1, -1, -1],
-    'A#m': [6, 8, 8, -1, -1, -1],
-    'Bm':  [7, 9, 9, -1, -1, -1],
-}
-
-CHORD_TEMPLATES = {
-    'C':     [1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0],
-    'C#':    [0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
-    'D':     [0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0],
-    'D#':    [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0],
-    'E':     [0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1],
-    'F':     [1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0],
-    'F#':    [0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0],
-    'G':     [0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1],
-    'G#':    [1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0],
-    'A':     [0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0],
-    'A#':    [0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0],
-    'B':     [0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1],
-    'Cm':    [1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0],
-    'C#m':   [0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
-    'Dm':    [0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0],
-    'D#m':   [0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0],
-    'Em':    [0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1],
-    'Fm':    [1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
-    'F#m':   [0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0],
-    'Gm':    [0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0],
-    'G#m':   [0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1],
-    'Am':    [1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0],
-    'A#m':   [0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0],
-    'Bm':    [0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1],
-    'Dmaj7': [0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1],
-    'Cmaj7': [1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1],
-    'Fmaj7': [1, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0],
-    'G7':    [0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1],
-    'E7':    [0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 1],
-    'A7':    [1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0],
-    'D7':    [1, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0],
-    'B7':    [0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1]
-}
-
-
-def generate_chord_ascii_tab(measures, string_names=DEFAULT_TUNING_NAMES):
+def track_beats(mix_path, stem_path, duration, beats_per_bar=4):
     """
-    Renders structured ASCII tablature with chord names printed above each measure.
+    Beat times + downbeat phase. Prefers the full mix (drums) and falls back
+    to the stem. Beats are extrapolated to cover [0, duration].
+    Returns (beats, phase, bpm, source_label).
     """
-    if not measures:
-        return "\n".join(f"{s}|---|" for s in string_names)
-
-    lines_output = []
-    bars_per_line = 3
-    for chunk_start in range(0, len(measures), bars_per_line):
-        chunk = measures[chunk_start:chunk_start + bars_per_line]
-
-        # Header with chord names and bar numbers
-        header_parts = ["    "]
-        for m in chunk:
-            chord_label = f"Bar {m['number']}: {m.get('chord', '')}"
-            header_parts.append(f"{chord_label:<24}")
-        lines_output.append("".join(header_parts))
-
-        # 6 string lines (from high e down to low E)
-        for s_idx, s_name in enumerate(string_names):
-            string_num = s_idx + 1  # 1 = high e, 6 = low E
-            row_parts = [f"{s_name:2s}|"]
-            for m in chunk:
-                s_notes = [n for n in m.get("notes", []) if n["string"] == string_num]
-                if s_notes:
-                    fret_str = str(s_notes[0]["fret"])
-                    bar_str = f"--{fret_str:2s}----{fret_str:2s}----{fret_str:2s}----{fret_str:2s}--|"
-                else:
-                    bar_str = "------------------------|"
-                row_parts.append(bar_str)
-            lines_output.append("".join(row_parts))
-
-        lines_output.append("")
-
-    return "\n".join(lines_output)
-
-
-def transcribe_chord_and_rhythm_tabs(
-    audio_path,
-    tuning_pitches=DEFAULT_TUNING_PITCHES,
-    tuning_names=DEFAULT_TUNING_NAMES,
-    voicing_style="standard",
-    total_duration=0.0
-):
+    import numpy as np
     import librosa
-    import numpy as np
-    from collections import Counter
 
-    emit(type="progress", pct=15, message="Analyzing harmonic spectrum & rhythmic beat grid…")
-    y, sr = librosa.load(audio_path, sr=22050)
-    actual_dur = len(y) / float(sr)
-    if total_duration <= 0:
-        total_duration = actual_dur
+    source = None
+    for path, label in ((mix_path, "mix"), (stem_path, "stem")):
+        if path and os.path.isfile(path):
+            source = (path, label)
+            break
 
-    y_harmonic, _ = librosa.effects.hpss(y)
+    bpm = 120.0
+    beats = np.array([], dtype=float)
+    phase = 0
+    label = "fixed"
 
-    emit(type="progress", pct=35, message="Tracking beats, tempo & measure structure…")
-    tempo, beats = librosa.beat.beat_track(y=y, sr=sr)
-    bpm = round(float(np.atleast_1d(tempo)[0]), 1)
-    if bpm < 45.0 or bpm > 240.0:
+    if source:
+        try:
+            y, sr = load_mono(source[0], target_sr=22050)
+            hop = 512
+            y_h, y_p = librosa.effects.hpss(y)
+            onset_env = librosa.onset.onset_strength(y=y_p, sr=sr, hop_length=hop, aggregate=np.median)
+            tempo, beat_frames = librosa.beat.beat_track(
+                onset_envelope=onset_env, sr=sr, hop_length=hop, start_bpm=118.0, tightness=110, trim=False
+            )
+            tempo = float(np.atleast_1d(tempo)[0])
+            beats = librosa.frames_to_time(beat_frames, sr=sr, hop_length=hop)
+            if len(beats) >= 8:
+                ibi = np.median(np.diff(beats))
+                if ibi > 0:
+                    bpm = 60.0 / ibi
+                else:
+                    bpm = tempo
+                label = source[1]
+
+                # downbeat phase: harmony changes land on downbeats far more
+                # often than elsewhere, and downbeats are accented. Decode the
+                # chord progression of the mix and vote with the change points.
+                score = np.zeros(len(beat_frames))
+                try:
+                    mix_chords = decode_chords(y, sr, [float(b) for b in beats], "clean")
+                    for c in mix_chords[1:]:
+                        i = int(np.argmin(np.abs(beats - c["start"])))
+                        score[i] += min(4.0, (c["end"] - c["start"]) / ibi)
+                    if score.max() > 0:
+                        score = score / score.max()
+                except Exception:
+                    pass
+                full_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop)
+                accent = np.array([full_env[max(0, min(len(full_env) - 1, f)):min(len(full_env), f + 3)].max() for f in beat_frames])
+                if accent.max() > 0:
+                    accent = accent / accent.max()
+                score = score + 0.35 * accent
+                phase_scores = [
+                    float(np.mean(score[p::beats_per_bar])) if len(score[p::beats_per_bar]) else 0.0
+                    for p in range(beats_per_bar)
+                ]
+                phase = int(np.argmax(phase_scores))
+            else:
+                beats = np.array([], dtype=float)
+        except Exception as e:
+            emit(type="info", message=f"Beat tracking fell back to a fixed grid: {e}")
+            beats = np.array([], dtype=float)
+
+    if not (45.0 <= bpm <= 240.0):
         bpm = 120.0
-    beat_times = librosa.frames_to_time(beats, sr=sr)
-    if len(beat_times) < 4:
-        beat_dur = 60.0 / bpm
-        beat_times = np.arange(0, total_duration, beat_dur)
 
-    emit(type="progress", pct=55, message="Matching guitar chord progressions across measures…")
-    fmin = librosa.note_to_hz("E2")
-    chroma = librosa.feature.chroma_cqt(y=y_harmonic, sr=sr, fmin=fmin, n_octaves=5, bins_per_octave=24)
-    if len(beats) > 1:
-        chroma_sync = librosa.util.sync(chroma, beats, aggregate=np.median)
+    ibi = 60.0 / bpm
+    if len(beats) < 8:
+        beats = np.arange(0.0, max(duration, ibi) + ibi, ibi)
+        phase = 0
+        label = "fixed"
     else:
-        chroma_sync = chroma
+        # extrapolate to the start and end of the track
+        head = []
+        t = beats[0] - ibi
+        while t > -ibi * 0.5:
+            head.append(t)
+            t -= ibi
+        head = head[::-1]
+        tail = []
+        t = beats[-1] + ibi
+        while t < duration + ibi:
+            tail.append(t)
+            t += ibi
+        # keep the phase consistent after prepending beats
+        phase = (phase - len(head)) % beats_per_bar
+        beats = np.concatenate([np.array(head), beats, np.array(tail)])
+        beats = beats[beats > -1e-6]
+        if len(head):
+            phase = (phase) % beats_per_bar
+    return [round(float(b), 4) for b in beats], phase, round(bpm, 1), label
 
-    template_names = list(CHORD_TEMPLATES.keys())
-    template_matrix = np.array([CHORD_TEMPLATES[k] for k in template_names], dtype=np.float32)
-    template_matrix /= np.linalg.norm(template_matrix, axis=1, keepdims=True)
 
-    num_cols = min(len(beat_times), chroma_sync.shape[1])
-    sim_matrix = np.zeros((len(template_names), num_cols), dtype=np.float32)
-
-    for col in range(num_cols):
-        c = chroma_sync[:, col]
-        norm = np.linalg.norm(c)
-        if norm > 1e-3:
-            sim_matrix[:, col] = np.dot(template_matrix, c / norm)
-        else:
-            sim_matrix[:, col] = 0.0
-
-    # Viterbi decoding with temporal inertia (musical chord continuity)
-    path = []
-    prev_idx = int(np.argmax(sim_matrix[:, 0])) if num_cols > 0 else 0
-    for col in range(num_cols):
-        scores = sim_matrix[:, col].copy()
-        scores[prev_idx] += 0.22
-        best = int(np.argmax(scores))
-        path.append(template_names[best])
-        prev_idx = best
-
-    while len(path) < len(beat_times):
-        path.append(path[-1] if path else "D")
-
-    emit(type="progress", pct=75, message="Voicing authentic guitar grips & rhythm strums…")
-
-    if voicing_style == "power":
-        voicings = GUITAR_POWER_VOICINGS
-    elif voicing_style == "barre":
-        voicings = GUITAR_BARRE_VOICINGS
-    else:
-        voicings = GUITAR_CHORD_VOICINGS
-
+def build_measures(beats, phase, beats_per_bar, duration):
+    """Measures from the beat grid: each starts at a downbeat."""
     measures = []
-    assigned_notes = []
-    bar_dur = 4.0 * (60.0 / bpm)
-    total_bars = int(np.ceil(total_duration / bar_dur)) if bar_dur > 0 else 1
-
-    for b in range(total_bars):
-        m_start = round(b * bar_dur, 3)
-        m_end = round((b + 1) * bar_dur, 3)
-
-        b_indices = [i for i, bt in enumerate(beat_times) if m_start <= bt < m_end]
-        if b_indices:
-            m_chords = [path[i] for i in b_indices if i < len(path)]
-            dominant_chord = Counter(m_chords).most_common(1)[0][0] if m_chords else "D"
-            strum_times = [beat_times[i] for i in b_indices]
-        else:
-            dominant_chord = path[min(b * 4, len(path) - 1)] if path else "D"
-            strum_times = [m_start + i * (bar_dur / 4.0) for i in range(4)]
-
-        voicing = voicings.get(dominant_chord, voicings.get("D", [-1] * 6))
-
-        m_notes = []
-        strum_dur = (60.0 / bpm) * 0.75
-
-        for st in strum_times:
-            if st >= total_duration:
-                continue
-            for s_idx, fret in enumerate(voicing):
-                if fret >= 0:
-                    string_num = 6 - s_idx  # 1 = high e, 6 = low E
-                    open_pitch = tuning_pitches[string_num - 1]
-                    pitch = open_pitch + fret
-                    n_start = round(float(st), 3)
-                    n_end = round(float(st + strum_dur), 3)
-                    note_obj = {
-                        "string": string_num,
-                        "fret": fret,
-                        "pitch": pitch,
-                        "start": n_start,
-                        "end": n_end,
-                        "amplitude": 0.85,
-                        "chord": dominant_chord
-                    }
-                    m_notes.append(note_obj)
-                    assigned_notes.append(note_obj)
-
-        measures.append({
-            "number": b + 1,
-            "start": m_start,
-            "end": m_end,
-            "chord": dominant_chord,
-            "notes": m_notes
-        })
-
-    emit(type="progress", pct=88, message="Generating formatted chord tablature…")
-    ascii_tab = generate_chord_ascii_tab(measures, string_names=tuning_names)
-
-    return bpm, assigned_notes, measures, ascii_tab
-
-
-def build_measures(assigned_notes, bpm=120, total_duration=0):
-    import numpy as np
-
-    bpm = max(45.0, min(240.0, bpm))
-    beat_dur = 60.0 / bpm
-    bar_dur = beat_dur * 4.0
-    max_time = max(total_duration, max((n["end"] for n in assigned_notes), default=0.0))
-    total_bars = max(1, int(np.ceil(max_time / bar_dur)))
-
-    measures = []
-    for b in range(total_bars):
-        b_start = round(b * bar_dur, 3)
-        b_end = round((b + 1) * bar_dur, 3)
-        m_notes = [n for n in assigned_notes if b_start <= n["start"] < b_end]
-        measures.append({
-            "number": b + 1,
-            "start": b_start,
-            "end": b_end,
-            "notes": m_notes
-        })
+    if not beats:
+        return measures
+    ibi = beats[1] - beats[0] if len(beats) > 1 else 0.5
+    # a partial pickup bar before the first downbeat
+    first_down = phase
+    if first_down > 0 and beats[0] > 0.05:
+        measures.append({"start": 0.0, "end": beats[first_down]})
+    elif first_down > 0:
+        measures.append({"start": 0.0, "end": beats[first_down]})
+    elif beats[0] > 0.05:
+        measures.append({"start": 0.0, "end": beats[0]})
+    i = first_down
+    while i < len(beats):
+        start = beats[i]
+        j = i + beats_per_bar
+        end = beats[j] if j < len(beats) else beats[-1] + ibi * (j - (len(beats) - 1))
+        if start >= duration:
+            break
+        measures.append({"start": round(float(start), 4), "end": round(float(min(end, duration + ibi)), 4)})
+        i = j
+    for n, m in enumerate(measures):
+        m["number"] = n + 1
     return measures
 
 
+def beat_subdivisions(measure_start, measure_end, beats, per_beat=4):
+    """Times of the 16th-note columns inside a measure, following the tracked beats."""
+    inside = [b for b in beats if measure_start - 1e-6 <= b < measure_end - 1e-6]
+    if not inside or abs(inside[0] - measure_start) > 1e-3:
+        inside = [measure_start] + inside
+    edges = inside + [measure_end]
+    cols = []
+    for a, b in zip(edges[:-1], edges[1:]):
+        for k in range(per_beat):
+            cols.append(a + (b - a) * k / per_beat)
+    return cols
+
+
+# ---------------------------------------------------------------------------
+# monophonic f0 tracking
+# ---------------------------------------------------------------------------
+
+def track_f0(y, sr, fmin, fmax, hop_s, device, octave_up=False):
+    """
+    Frame-wise fundamental frequency with a confidence.
+    Returns (times, f0_hz (nan when unvoiced), confidence, tracker_label).
+    `octave_up` presents the audio to the tracker an octave higher (bass lives
+    below the sweet spot of most trackers); results are folded back down.
+    """
+    import numpy as np
+
+    hop = max(1, int(round(hop_s * sr)))
+    n_frames = int(math.ceil(len(y) / hop))
+    times = np.arange(n_frames) * hop / sr
+
+    forced = os.environ.get("STEMKIT_F0_TRACKER", "").lower() or ("pyin" if octave_up else "")
+    try:
+        if forced == "pyin":
+            raise ImportError("pYIN selected")
+        import torch
+        import torchcrepe
+
+        dev = pick_torch_device(device)
+        declared_sr = sr * 2 if octave_up else sr
+        # the full model is ~20x slower than tiny and barely more accurate on
+        # clean stems; only worth it when a CUDA GPU makes it free
+        model = os.environ.get("STEMKIT_CREPE_MODEL") or ("full" if dev == "cuda" else "tiny")
+        audio = torch.from_numpy(y).unsqueeze(0)
+
+        def run(dev_name):
+            return torchcrepe.predict(
+                audio,
+                declared_sr,
+                hop_length=hop,
+                fmin=max(30.0, fmin * (2 if octave_up else 1)),
+                fmax=min(2000.0, fmax * (2 if octave_up else 1)),
+                model=model,
+                batch_size=1024,
+                device=dev_name,
+                return_periodicity=True,
+            )
+
+        try:
+            pitch, periodicity = run(dev)
+        except Exception as e:
+            if dev != "cpu":
+                emit(type="info", message=f"CREPE on {dev} failed ({e}); using CPU")
+                pitch, periodicity = run("cpu")
+            else:
+                raise
+        periodicity = torchcrepe.filter.median(periodicity, 5)
+        pitch = torchcrepe.filter.median(pitch, 3)
+        f0 = pitch.squeeze(0).cpu().numpy().astype(np.float64)
+        conf = periodicity.squeeze(0).cpu().numpy().astype(np.float64)
+        if octave_up:
+            f0 = f0 / 2.0
+        n = min(len(f0), n_frames)
+        out_f0 = np.full(n_frames, np.nan)
+        out_conf = np.zeros(n_frames)
+        out_f0[:n] = f0[:n]
+        out_conf[:n] = conf[:n]
+        return times, out_f0, out_conf, f"CREPE {model} ({dev})"
+    except ImportError:
+        pass
+    except Exception as e:
+        emit(type="info", message=f"CREPE unavailable ({e}); using pYIN")
+
+    import librosa
+
+    # pYIN works best around 22 kHz for these registers
+    target_sr = 22050
+    y2 = librosa.resample(y, orig_sr=sr, target_sr=target_sr, res_type="soxr_hq") if sr != target_sr else y
+    stride = 2  # analyse every 20 ms, then expand to the 10 ms grid
+    hop2 = max(1, int(round(hop_s * stride * target_sr)))
+    frame_length = 4096 if fmin < 60 else 2048
+    f0, voiced_flag, voiced_prob = librosa.pyin(
+        y2,
+        fmin=max(25.0, fmin),
+        fmax=fmax,
+        sr=target_sr,
+        frame_length=frame_length,
+        hop_length=hop2,
+        fill_na=np.nan,
+        center=True,
+    )
+    f0 = np.repeat(f0, stride)
+    voiced_prob = np.repeat(np.nan_to_num(voiced_prob), stride)
+    n = min(len(f0), n_frames)
+    out_f0 = np.full(n_frames, np.nan)
+    out_conf = np.zeros(n_frames)
+    out_f0[:n] = f0[:n]
+    out_conf[:n] = voiced_prob[:n]
+    return times, out_f0, out_conf, "pYIN"
+
+
+def fix_octaves(notes, y, sr, lowest, highest):
+    """
+    Pitch trackers sometimes lock onto the 2nd harmonic. For each note compare
+    the harmonic series rooted at the detected pitch with the series rooted an
+    octave below; if the lower root explains the spectrum better (and actually
+    has energy at its fundamental) the note moves down an octave.
+    """
+    if not notes:
+        return notes
+    import numpy as np
+    import librosa
+
+    hop = 512
+    bpo = 36
+    fmin_midi = 24
+    n_bins = 7 * bpo
+    try:
+        C = np.abs(librosa.cqt(y, sr=sr, hop_length=hop, fmin=librosa.midi_to_hz(fmin_midi), n_bins=n_bins, bins_per_octave=bpo))
+    except Exception:
+        return notes
+    C = librosa.amplitude_to_db(C, ref=np.max)
+    n_frames = C.shape[1]
+    harmonics = (0, 12, 19, 24)
+
+    def energy(col, midi):
+        b = int(round((midi - fmin_midi) * bpo / 12))
+        if b < 1 or b >= n_bins - 1:
+            return -80.0
+        return float(col[b - 1:b + 2].max())
+
+    def series(col, root):
+        vals = [energy(col, root + h) for h in harmonics]
+        return sum(vals) / len(vals)
+
+    out = []
+    for n in notes:
+        f0 = min(n_frames - 1, int(n["start"] * sr / hop) + 1)
+        f1 = max(f0 + 1, min(n_frames, int(n["end"] * sr / hop)))
+        col = C[:, f0:f1].mean(axis=1)
+        floor = float(np.percentile(col, 35))
+        p = n["pitch"]
+        q = p - 12
+        if q >= lowest:
+            concurrent_below = any(
+                o is not n and o["pitch"] == q and o["start"] < n["end"] and o["end"] > n["start"] for o in notes
+            )
+            eq, ep = energy(col, q), energy(col, p)
+            if not concurrent_below and eq >= floor + 14.0 and eq >= ep - 16.0 and series(col, q) >= series(col, p) - 2.0:
+                n = dict(n, pitch=q)
+        out.append(n)
+    return out
+
+
+def frame_rms(y, sr, hop):
+    import numpy as np
+    import librosa
+
+    rms = librosa.feature.rms(y=y, frame_length=hop * 4, hop_length=hop, center=True)[0]
+    return rms.astype(np.float64)
+
+
+def detect_onsets(y, sr, hop, sensitivity):
+    import numpy as np
+    import librosa
+
+    env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop, aggregate=np.median)
+    delta = 0.045 if sensitivity == "sensitive" else 0.09
+    wait = max(1, int(round(0.06 / (hop / sr))))
+    frames = librosa.onset.onset_detect(
+        onset_envelope=env,
+        sr=sr,
+        hop_length=hop,
+        backtrack=True,
+        delta=delta,
+        wait=wait,
+        pre_max=3,
+        post_max=3,
+        pre_avg=int(round(0.1 * sr / hop)),
+        post_avg=int(round(0.1 * sr / hop)),
+        units="frames",
+    )
+    strength = env[np.clip(frames, 0, len(env) - 1)] if len(frames) else np.array([])
+    return np.asarray(frames, dtype=int), env, strength
+
+
+def segment_mono_notes(times, f0, conf, rms, onset_frames, sr, hop, sensitivity, min_dur, conf_thresh):
+    """
+    Turn an f0 contour into discrete notes. A note begins at a detected onset
+    or when the pitch moves to a new semitone and stays there (legato);
+    it ends when the signal stops being periodic.
+    """
+    import numpy as np
+
+    n = len(f0)
+    midi = np.full(n, np.nan)
+    voiced = np.zeros(n, dtype=bool)
+    floor = max(1e-5, np.percentile(rms[rms > 0], 20) * 0.6) if np.any(rms > 0) else 1e-5
+    peak = max(floor * 4, np.percentile(rms, 97)) if n else 1.0
+    for i in range(n):
+        if not np.isnan(f0[i]) and f0[i] > 0 and conf[i] >= conf_thresh and rms[i] >= floor:
+            midi[i] = 69.0 + 12.0 * math.log2(f0[i] / 440.0)
+            voiced[i] = True
+
+    onset_set = set(int(f) for f in onset_frames)
+    if n > 3 and rms[:3].max() > floor * 3 and not any(f < 6 for f in onset_set):
+        onset_set.add(0)
+    unvoiced_end = 4  # frames (~40ms) of silence closes a note
+    sustain_frames = 3  # frames a new pitch must hold to count as legato
+    jump = 0.62  # semitones
+
+    notes = []
+    cur = None  # dict(start, pitches, legato)
+
+    def close(i_end):
+        nonlocal cur
+        if cur is None:
+            return
+        p = np.array(cur["pitches"])
+        w = np.array(cur["weights"])
+        if len(p) == 0:
+            cur = None
+            return
+        order = np.argsort(p)
+        cw = np.cumsum(w[order])
+        med = p[order][min(len(p) - 1, int(np.searchsorted(cw, cw[-1] / 2.0)))]
+        pitch = int(round(float(med)))
+        start_t = float(times[cur["start"]])
+        end_t = float(times[min(n - 1, i_end)])
+        if end_t - start_t >= min_dur:
+            amp = float(np.max(rms[cur["start"]:max(cur["start"] + 1, min(n, cur["start"] + 8))]))
+            amp = min(1.0, max(0.25, amp / peak))
+            notes.append({
+                "start": round(start_t, 3),
+                "end": round(end_t, 3),
+                "pitch": pitch,
+                "amplitude": round(amp, 3),
+                "legato": cur["legato"],
+            })
+        cur = None
+
+    silent_run = 0
+    last_close = -1
+    lookback = 20  # frames: an onset this far back with no note since belongs to this note
+
+    def snapped_start(i):
+        for k in range(i, max(last_close, i - lookback) - 1, -1):
+            if k in onset_set:
+                return k
+        return i
+
+    i = 0
+    while i < n:
+        if voiced[i]:
+            silent_run = 0
+            is_onset = any((i + d) in onset_set for d in (-1, 0, 1))
+            if cur is None:
+                cur = {"start": snapped_start(i), "pitches": [midi[i]], "weights": [conf[i]], "legato": False}
+            elif is_onset and (i - cur["start"]) >= 3 and not cur.get("onset_used_at", -10) >= i - 2:
+                close(i)
+                cur = {"start": i, "pitches": [midi[i]], "weights": [conf[i]], "legato": False}
+                cur["onset_used_at"] = i
+            else:
+                ref = float(np.median(cur["pitches"][-6:]))
+                if abs(midi[i] - ref) >= jump and (i - cur["start"]) >= 2:
+                    # sustained move to a new semitone -> legato note
+                    ahead = [midi[k] for k in range(i, min(n, i + sustain_frames)) if voiced[k]]
+                    if len(ahead) >= min(sustain_frames, n - i) and all(abs(a - ref) >= jump for a in ahead) \
+                            and (max(ahead) - min(ahead)) < 0.9:
+                        close(i)
+                        cur = {"start": i, "pitches": [midi[i]], "weights": [conf[i]], "legato": True}
+                    else:
+                        cur["pitches"].append(midi[i])
+                        cur["weights"].append(conf[i] * 0.3)
+                else:
+                    cur["pitches"].append(midi[i])
+                    cur["weights"].append(conf[i])
+        else:
+            if cur is not None:
+                silent_run += 1
+                if silent_run >= unvoiced_end:
+                    close(i - silent_run + 1)
+                    last_close = i
+                    silent_run = 0
+        i += 1
+    close(n - 1)
+
+    # merge fragments of the same pitch separated by a tiny gap without an onset
+    notes.sort(key=lambda x: x["start"])
+    merged = []
+    for nt in notes:
+        if merged and merged[-1]["pitch"] == nt["pitch"] and nt["start"] - merged[-1]["end"] <= 0.035 \
+                and not nt.get("legato") and not any(
+                    abs(times[f] - nt["start"]) < 0.02 for f in onset_frames if abs(times[f] - nt["start"]) < 0.02):
+            merged[-1]["end"] = max(merged[-1]["end"], nt["end"])
+            merged[-1]["amplitude"] = max(merged[-1]["amplitude"], nt["amplitude"])
+        else:
+            merged.append(nt)
+
+    # articulation labels for legato notes
+    prev = None
+    for nt in merged:
+        if nt.get("legato") and prev is not None:
+            d = nt["pitch"] - prev["pitch"]
+            if abs(d) >= 3:
+                nt["articulation"] = "slide"
+            elif d > 0:
+                nt["articulation"] = "hammer"
+            elif d < 0:
+                nt["articulation"] = "pull"
+        nt.pop("legato", None)
+        prev = nt
+    return merged
+
+
+def transcribe_lead(y, sr, instrument, sensitivity, device, progress_base=10):
+    """Monophonic transcription (bass, guitar lead lines)."""
+    import numpy as np
+
+    is_bass = instrument == "bass"
+    hop_s = 0.01
+    hop = int(round(hop_s * sr))
+    fmin = 28.0 if is_bass else 70.0
+    fmax = 500.0 if is_bass else 1400.0
+
+    progress(progress_base, f"Tracking {'bass' if is_bass else 'guitar'} pitch contour…")
+    times, f0, conf, tracker = track_f0(y, sr, fmin, fmax, hop_s, device, octave_up=is_bass)
+
+    progress(progress_base + 30, "Detecting note onsets…")
+    onset_frames, env, _ = detect_onsets(y, sr, hop, sensitivity)
+    rms = frame_rms(y, sr, hop)
+    n = len(f0)
+    if len(rms) < n:
+        rms = np.pad(rms, (0, n - len(rms)))
+    rms = rms[:n]
+
+    conf_thresh = 0.30 if sensitivity == "sensitive" else 0.42
+    if tracker == "pYIN":
+        conf_thresh = 0.35 if sensitivity == "sensitive" else 0.5
+    min_dur = (0.05 if sensitivity == "sensitive" else 0.07) if is_bass else (0.045 if sensitivity == "sensitive" else 0.06)
+
+    progress(progress_base + 40, "Segmenting notes…")
+    notes = segment_mono_notes(times, f0, conf, rms, onset_frames, sr, hop, sensitivity, min_dur, conf_thresh)
+    progress(progress_base + 48, "Checking octaves against the spectrum…")
+    lowest = 28 if is_bass else 40
+    notes = fix_octaves(notes, y, sr, lowest, 100)
+    return notes, f"{tracker} f0 tracking + onset segmentation"
+
+
+# ---------------------------------------------------------------------------
+# polyphonic transcription (Basic Pitch) + refinement
+# ---------------------------------------------------------------------------
+
+def transcribe_poly(path, y, sr, sensitivity, device, lowest_pitch, highest_pitch, progress_base=10):
+    try:
+        from basic_pitch.inference import predict
+        from basic_pitch import ICASSP_2022_MODEL_PATH
+    except Exception as e:
+        fail(
+            "The polyphonic engine (Basic Pitch) is not available in the Python environment "
+            f"({e}). Re-open the tab stage to reinstall it, or use the Lead mode."
+        )
+
+    is_sensitive = sensitivity == "sensitive"
+    onset_t = 0.42 if is_sensitive else 0.55
+    frame_t = 0.26 if is_sensitive else 0.34
+    min_len = 55 if is_sensitive else 80
+    fmin = 440.0 * 2 ** ((lowest_pitch - 1 - 69) / 12)
+    fmax = 440.0 * 2 ** ((highest_pitch + 1 - 69) / 12)
+
+    progress(progress_base, "Running Basic Pitch polyphonic model…")
+    try:
+        _, _, raw_notes = predict(
+            path,
+            model_or_model_path=ICASSP_2022_MODEL_PATH,
+            onset_threshold=onset_t,
+            frame_threshold=frame_t,
+            minimum_note_length=min_len,
+            minimum_frequency=fmin,
+            maximum_frequency=fmax,
+            melodia_trick=True,
+        )
+    except TypeError:
+        _, _, raw_notes = predict(
+            path,
+            onset_threshold=onset_t,
+            frame_threshold=frame_t,
+            minimum_note_length=min_len,
+            minimum_frequency=fmin,
+            maximum_frequency=fmax,
+            melodia_trick=True,
+        )
+    except Exception as e:
+        fail(f"Basic Pitch transcription failed: {e}")
+
+    notes = []
+    for ev in raw_notes:
+        start, end, pitch, amp = float(ev[0]), float(ev[1]), int(round(ev[2])), float(ev[3])
+        if end - start < 0.04:
+            continue
+        notes.append({"start": round(start, 3), "end": round(end, 3), "pitch": pitch, "amplitude": round(min(1.0, max(0.2, amp)), 3)})
+    notes.sort(key=lambda x: (x["start"], x["pitch"]))
+
+    # f0 anchor: repair octave errors where the audio is clearly monophonic
+    progress(progress_base + 35, "Anchoring against pitch contour…")
+    try:
+        import numpy as np
+        hop_s = 0.01
+        times, f0, conf, _ = track_f0(y, sr, max(40.0, fmin), fmax, hop_s, device, octave_up=False)
+        midi_track = np.full(len(f0), np.nan)
+        ok = (~np.isnan(f0)) & (conf >= 0.55) & (f0 > 0)
+        midi_track[ok] = 69.0 + 12.0 * np.log2(f0[ok] / 440.0)
+
+        def track_pitch_between(a, b):
+            i0 = int(a / hop_s)
+            i1 = max(i0 + 1, int(b / hop_s))
+            seg = midi_track[i0:i1]
+            seg = seg[~np.isnan(seg)]
+            if len(seg) < max(3, 0.4 * (i1 - i0)):
+                return None
+            return float(np.median(seg))
+
+        fixed = []
+        for nt in notes:
+            anchor = track_pitch_between(nt["start"], nt["end"])
+            if anchor is not None:
+                concurrent = [o for o in notes if o is not nt and o["start"] < nt["end"] and o["end"] > nt["start"]]
+                if not concurrent:
+                    diff = nt["pitch"] - anchor
+                    if 11.4 <= abs(diff) <= 12.6:
+                        nt = dict(nt, pitch=int(round(anchor)))
+            fixed.append(nt)
+        notes = fixed
+    except Exception as e:
+        emit(type="info", message=f"Pitch anchoring skipped: {e}")
+
+    progress(progress_base + 45, "Filtering harmonic ghost notes…")
+    notes = filter_harmonics(notes)
+    notes = fix_octaves(notes, y, sr, lowest_pitch, highest_pitch)
+    notes = [n for n in notes if lowest_pitch <= n["pitch"] <= highest_pitch]
+    return notes, "Basic Pitch (ONNX) + f0 anchoring"
+
+
+def filter_harmonics(notes):
+    """Drop weak notes that sit on the overtone series of a concurrent, stronger, lower note."""
+    HARMONICS = {12, 19, 24, 28, 31}
+    keep = []
+    for n in notes:
+        ghost = False
+        for o in notes:
+            if o is n or o["pitch"] >= n["pitch"]:
+                continue
+            if (n["pitch"] - o["pitch"]) not in HARMONICS:
+                continue
+            overlap = min(n["end"], o["end"]) - max(n["start"], o["start"])
+            if overlap <= 0.03:
+                continue
+            same_attack = abs(n["start"] - o["start"]) < 0.04
+            if n["amplitude"] <= o["amplitude"] * (0.55 if same_attack else 0.7):
+                ghost = True
+                break
+        if not ghost:
+            keep.append(n)
+    # merge rapid same-pitch fragments
+    keep.sort(key=lambda x: (x["pitch"], x["start"]))
+    merged = []
+    for n in keep:
+        if merged and merged[-1]["pitch"] == n["pitch"] and n["start"] - merged[-1]["end"] <= 0.04:
+            merged[-1] = dict(merged[-1], end=max(merged[-1]["end"], n["end"]), amplitude=max(merged[-1]["amplitude"], n["amplitude"]))
+        else:
+            merged.append(dict(n))
+    merged.sort(key=lambda x: (x["start"], x["pitch"]))
+    return merged
+
+
+# ---------------------------------------------------------------------------
+# chord engine
+# ---------------------------------------------------------------------------
+
+CHORD_QUALITIES = {
+    "": [0, 4, 7],
+    "m": [0, 3, 7],
+    "7": [0, 4, 7, 10],
+    "maj7": [0, 4, 7, 11],
+    "m7": [0, 3, 7, 10],
+    "sus2": [0, 2, 7],
+    "sus4": [0, 5, 7],
+    "5": [0, 7],
+}
+
+# open shapes, low E (string 6) -> high e (string 1); -1 = not played
+OPEN_SHAPES = {
+    "C": [-1, 3, 2, 0, 1, 0], "D": [-1, -1, 0, 2, 3, 2], "E": [0, 2, 2, 1, 0, 0], "G": [3, 2, 0, 0, 0, 3],
+    "A": [-1, 0, 2, 2, 2, 0], "F": [1, 3, 3, 2, 1, 1],
+    "Am": [-1, 0, 2, 2, 1, 0], "Dm": [-1, -1, 0, 2, 3, 1], "Em": [0, 2, 2, 0, 0, 0],
+    "A7": [-1, 0, 2, 0, 2, 0], "B7": [-1, 2, 1, 2, 0, 2], "C7": [-1, 3, 2, 3, 1, 0], "D7": [-1, -1, 0, 2, 1, 2],
+    "E7": [0, 2, 0, 1, 0, 0], "G7": [3, 2, 0, 0, 0, 1],
+    "Cmaj7": [-1, 3, 2, 0, 0, 0], "Dmaj7": [-1, -1, 0, 2, 2, 2], "Fmaj7": [-1, -1, 3, 2, 1, 0], "Amaj7": [-1, 0, 2, 1, 2, 0],
+    "Am7": [-1, 0, 2, 0, 1, 0], "Dm7": [-1, -1, 0, 2, 1, 1], "Em7": [0, 2, 0, 0, 0, 0],
+    "Dsus2": [-1, -1, 0, 2, 3, 0], "Asus2": [-1, 0, 2, 2, 0, 0], "Esus4": [0, 2, 2, 2, 0, 0],
+    "Dsus4": [-1, -1, 0, 2, 3, 3], "Asus4": [-1, 0, 2, 2, 3, 0],
+    "E5": [0, 2, 2, -1, -1, -1], "A5": [-1, 0, 2, 2, -1, -1], "D5": [-1, -1, 0, 2, 3, -1],
+}
+
+# movable shapes relative to the barre fret F (low E -> high e)
+E_SHAPES = {
+    "": [0, 2, 2, 1, 0, 0], "m": [0, 2, 2, 0, 0, 0], "7": [0, 2, 0, 1, 0, 0], "maj7": [0, -1, 1, 1, 0, -1],
+    "m7": [0, 2, 0, 0, 0, 0], "sus2": [0, 2, 4, 4, 0, 0], "sus4": [0, 2, 2, 2, 0, 0], "5": [0, 2, 2, -1, -1, -1],
+}
+A_SHAPES = {
+    "": [-1, 0, 2, 2, 2, 0], "m": [-1, 0, 2, 2, 1, 0], "7": [-1, 0, 2, 0, 2, 0], "maj7": [-1, 0, 2, 1, 2, 0],
+    "m7": [-1, 0, 2, 0, 1, 0], "sus2": [-1, 0, 2, 2, 0, 0], "sus4": [-1, 0, 2, 2, 3, 0], "5": [-1, 0, 2, 2, -1, -1],
+}
+
+
+def chord_name(root, quality):
+    return NOTE_NAMES[root % 12] + quality
+
+
+def chord_templates():
+    import numpy as np
+    names, mats = [], []
+    for root in range(12):
+        for q, ivs in CHORD_QUALITIES.items():
+            v = np.zeros(12)
+            for k, iv in enumerate(ivs):
+                v[(root + iv) % 12] = 1.0 if k == 0 else (0.85 if iv in (7,) else 0.75)
+            names.append(chord_name(root, q))
+            mats.append(v / np.linalg.norm(v))
+    return names, np.array(mats)
+
+
+def decode_chords(y, sr, beats, sensitivity):
+    """Beat-synchronous chroma + Viterbi decoding. Returns [{start, end, name}]."""
+    import numpy as np
+    import librosa
+
+    hop = 512
+    y_h, _ = librosa.effects.hpss(y)
+    chroma = librosa.feature.chroma_cqt(y=y_h, sr=sr, hop_length=hop, bins_per_octave=24, n_octaves=4,
+                                        fmin=librosa.note_to_hz("C3"))
+    beat_frames = librosa.time_to_frames(np.array(beats), sr=sr, hop_length=hop)
+    beat_frames = np.clip(beat_frames, 0, chroma.shape[1] - 1)
+    sync = librosa.util.sync(chroma, beat_frames, aggregate=np.median)
+    names, templates = chord_templates()
+    n_states = len(names)
+    T = sync.shape[1]
+    if T == 0:
+        return []
+    # emissions
+    emis = np.zeros((n_states, T))
+    energy = np.zeros(T)
+    for t in range(T):
+        c = sync[:, t]
+        nrm = np.linalg.norm(c)
+        energy[t] = nrm
+        emis[:, t] = templates @ (c / nrm) if nrm > 1e-4 else 0.0
+    # cosine similarities live in a narrow band, so sharpen them before they
+    # compete with the switch penalty; simpler chord qualities get a small prior
+    prior = np.zeros(n_states)
+    for i, nm in enumerate(names):
+        _, q = split_chord_name(nm)
+        prior[i] = {"": 0.0, "m": 0.0, "7": -0.45, "maj7": -0.5, "m7": -0.45, "sus2": -0.8, "sus4": -0.8, "5": -1.0}[q]
+    beta = 14.0
+    log_emis = beta * emis + prior[:, None]
+    switch = 3.0 if sensitivity == "sensitive" else 4.2
+    trans = np.full((n_states, n_states), -switch)
+    np.fill_diagonal(trans, 0.0)
+    # viterbi
+    dp = np.zeros((n_states, T))
+    back = np.zeros((n_states, T), dtype=int)
+    dp[:, 0] = log_emis[:, 0]
+    for t in range(1, T):
+        cand = dp[:, t - 1][:, None] + trans
+        back[:, t] = np.argmax(cand, axis=0)
+        dp[:, t] = cand[back[:, t], np.arange(n_states)] + log_emis[:, t]
+    path = np.zeros(T, dtype=int)
+    path[-1] = int(np.argmax(dp[:, -1]))
+    for t in range(T - 1, 0, -1):
+        path[t - 1] = back[path[t], t]
+    # frames -> beat segments
+    segs = []
+    beat_list = list(beats)
+    low_energy = np.percentile(energy, 15) if T else 0
+    for t in range(T):
+        start = beat_list[t] if t < len(beat_list) else beat_list[-1]
+        end = beat_list[t + 1] if t + 1 < len(beat_list) else start + (beat_list[-1] - beat_list[-2] if len(beat_list) > 1 else 0.5)
+        name = names[path[t]] if energy[t] > low_energy * 0.6 else None
+        if segs and segs[-1]["name"] == name:
+            segs[-1]["end"] = round(float(end), 4)
+        else:
+            segs.append({"start": round(float(start), 4), "end": round(float(end), 4), "name": name})
+    # drop one-beat blips between identical chords
+    cleaned = []
+    for i, s in enumerate(segs):
+        if 0 < i < len(segs) - 1 and (s["end"] - s["start"]) < 0.9 * (beat_list[1] - beat_list[0]) * 1.5 \
+                and segs[i - 1]["name"] == segs[i + 1]["name"] and s["name"] != segs[i - 1]["name"]:
+            continue
+        if cleaned and cleaned[-1]["name"] == s["name"]:
+            cleaned[-1]["end"] = s["end"]
+        else:
+            cleaned.append(dict(s))
+    return [s for s in cleaned if s["name"]]
+
+
+def split_chord_name(name):
+    root = 1 if len(name) > 1 and name[1] == "#" else 0
+    root_name = name[: root + 1]
+    return NOTE_NAMES.index(root_name), name[root + 1:]
+
+
+def voicings_for(name, style, tuning_pitches):
+    """All candidate voicings (list of 6 frets low->high, -1 muted) for a chord."""
+    root, quality = split_chord_name(name)
+    out = []
+    n_strings = len(tuning_pitches)
+    if n_strings != 6:
+        return out
+    low_e = tuning_pitches[-1] % 12
+    a_str = tuning_pitches[-2] % 12
+    if style == "standard" and name in OPEN_SHAPES:
+        out.append(OPEN_SHAPES[name])
+    if style == "power":
+        q = "5"
+    else:
+        q = quality if quality in E_SHAPES else ("m" if "m" in quality and "maj" not in quality else "")
+    fe = (root - low_e) % 12
+    fa = (root - a_str) % 12
+    for base, shapes in ((fe, E_SHAPES), (fa, A_SHAPES)):
+        for off in (0, 12):
+            f = base + off
+            if f > 14:
+                continue
+            shape = shapes[q]
+            v = [(-1 if s < 0 else f + s) for s in shape]
+            if f == 0 and style != "power":
+                # open position barre == open chord; fine
+                pass
+            out.append(v)
+    if style != "power" and quality == "5":
+        pass
+    # dedupe
+    seen = set()
+    uniq = []
+    for v in out:
+        key = tuple(v)
+        if key not in seen:
+            seen.add(key)
+            uniq.append(v)
+    return uniq
+
+
+def voicing_position(v):
+    fretted = [f for f in v if f > 0]
+    return min(fretted) if fretted else 0
+
+
+def transcribe_chords(y, sr, beats, measures, tuning_pitches, style, sensitivity, duration, progress_base=10):
+    """Chord decoding + strum onsets -> notes with chord labels."""
+    import numpy as np
+
+    progress(progress_base, "Decoding chord progression…")
+    y22 = y
+    sr22 = sr
+    if sr != 22050:
+        import librosa
+        y22 = librosa.resample(y, orig_sr=sr, target_sr=22050, res_type="soxr_hq")
+        sr22 = 22050
+    chords = decode_chords(y22, sr22, beats, sensitivity)
+    if not chords:
+        return [], chords, "Chord decoder (no harmonic content found)"
+
+    progress(progress_base + 35, "Locating strums…")
+    hop = int(round(0.01 * sr))
+    onset_frames, env, strength = detect_onsets(y, sr, hop, sensitivity)
+    onset_times = [f * hop / sr for f in onset_frames]
+    if len(strength):
+        thresh = max(float(np.percentile(strength, 25)), float(strength.max()) * 0.12)
+        onset_times = [t for t, s in zip(onset_times, strength) if s >= thresh]
+    rms = frame_rms(y, sr, hop)
+    peak = max(1e-4, float(np.percentile(rms, 97)))
+
+    def chord_at(t):
+        for c in chords:
+            if c["start"] - 0.03 <= t < c["end"]:
+                return c["name"]
+        return None
+
+    # a strum at every real onset; a sustained strum on the downbeat of bars with nothing
+    strum_times = []
+    for t in onset_times:
+        if chord_at(t):
+            strum_times.append(t)
+    for m in measures:
+        if not any(m["start"] - 0.05 <= t < m["end"] for t in strum_times):
+            if chord_at(m["start"] + 0.02):
+                strum_times.append(m["start"])
+    strum_times.sort()
+
+    progress(progress_base + 55, "Choosing voicings…")
+    notes = []
+    prev_voicing = None
+    voicing_cache = {}
+    for idx, t in enumerate(strum_times):
+        name = chord_at(t)
+        if not name:
+            continue
+        key = name
+        cands = voicing_cache.get(key)
+        if cands is None:
+            cands = voicings_for(name, style, tuning_pitches)
+            voicing_cache[key] = cands
+        if not cands:
+            continue
+        if prev_voicing is None:
+            best = min(cands, key=lambda v: voicing_position(v) * (0.35 if style == "standard" else 0.6))
+        else:
+            pp = voicing_position(prev_voicing)
+            best = min(cands, key=lambda v: abs(voicing_position(v) - pp) * 1.0 + voicing_position(v) * 0.15)
+        prev_voicing = best
+        next_t = strum_times[idx + 1] if idx + 1 < len(strum_times) else t + 1.5
+        end = min(next_t - 0.02, t + 1.6)
+        end = max(t + 0.12, end)
+        fi = min(len(rms) - 1, int(t / (hop / sr)))
+        amp = min(1.0, max(0.3, float(np.max(rms[fi:fi + 8])) / peak)) if len(rms) else 0.8
+        for s_idx, fret in enumerate(best):
+            if fret < 0:
+                continue
+            string_num = 6 - s_idx
+            pitch = tuning_pitches[string_num - 1] + fret
+            notes.append({
+                "string": string_num,
+                "fret": fret,
+                "pitch": pitch,
+                "start": round(float(t), 3),
+                "end": round(float(end), 3),
+                "amplitude": round(amp, 3),
+                "chord": name,
+            })
+    notes.sort(key=lambda x: (x["start"], x["string"]))
+    return notes, chords, "Beat-synchronous chroma + Viterbi chords, onset-driven strums"
+
+
+# ---------------------------------------------------------------------------
+# fingering solver
+# ---------------------------------------------------------------------------
+
+def candidates_for(pitch, tuning_pitches, max_fret):
+    out = []
+    for s_idx, open_p in enumerate(tuning_pitches):
+        f = pitch - open_p
+        if 0 <= f <= max_fret:
+            out.append((s_idx + 1, f))
+    return out
+
+
+def solve_fingering(notes, tuning_pitches, forced_position=None, max_fret=22, is_bass=False):
+    """
+    Viterbi over time slices. State = one (string, fret) assignment per note in
+    the slice. Cost = playability of the shape + how far the hand has to move
+    from the previous shape (scaled by the time available to move).
+    """
+    if not notes:
+        return []
+    notes = sorted(notes, key=lambda n: (n["start"], n["pitch"]))
+
+    # slices: notes attacked together
+    slices = []
+    cur = [notes[0]]
+    for n in notes[1:]:
+        if n["start"] - cur[0]["start"] <= 0.03:
+            cur.append(n)
+        else:
+            slices.append(cur)
+            cur = [n]
+    slices.append(cur)
+
+    def unary(combo):
+        frets = [f for _, f in combo]
+        fretted = [f for f in frets if f > 0]
+        cost = 0.0
+        for f in frets:
+            cost += f * (0.06 if not is_bass else 0.09)
+            if f > 12:
+                cost += (f - 12) * (0.25 if not is_bass else 0.4)
+        if fretted:
+            span = max(fretted) - min(fretted)
+            cost += span * 1.4 if span <= 4 else 40.0
+            if forced_position is not None:
+                lo, hi = forced_position, forced_position + 4
+                for f in fretted:
+                    if f < lo:
+                        cost += (lo - f) * 3.0
+                    elif f > hi:
+                        cost += (f - hi) * 3.0
+        elif forced_position is not None and forced_position > 2:
+            cost += 0.8  # open strings are fine but slightly off-box
+        strings = [s for s, _ in combo]
+        if len(strings) != len(set(strings)):
+            cost += 1e6
+        return cost
+
+    def hand_pos(combo):
+        fretted = [f for _, f in combo if f > 0]
+        return min(fretted) if fretted else None
+
+    slice_states = []
+    for sl in slices:
+        cand_lists = [candidates_for(n["pitch"], tuning_pitches, max_fret) for n in sl]
+        if any(len(c) == 0 for c in cand_lists):
+            # drop unplayable pitches from the slice
+            keep = [(n, c) for n, c in zip(sl, cand_lists) if c]
+            if not keep:
+                slice_states.append(([], []))
+                continue
+            sl[:] = [n for n, _ in keep]
+            cand_lists = [c for _, c in keep]
+        combos = []
+        for combo in itertools.product(*cand_lists):
+            strings = [s for s, _ in combo]
+            if len(strings) != len(set(strings)):
+                continue
+            u = unary(combo)
+            if u < 1e5:
+                combos.append((u, combo))
+        if not combos:
+            # unplayable chord: keep strongest notes that fit
+            order = sorted(range(len(sl)), key=lambda i: -sl[i]["amplitude"])
+            chosen = []
+            used = set()
+            for i in order:
+                for s, f in sorted(cand_lists[i], key=lambda c: c[1]):
+                    if s not in used:
+                        used.add(s)
+                        chosen.append((i, (s, f)))
+                        break
+            chosen.sort()
+            sl[:] = [sl[i] for i, _ in chosen]
+            combos = [(unary([c for _, c in chosen]), tuple(c for _, c in chosen))]
+        combos.sort(key=lambda x: x[0])
+        combos = combos[:48]
+        slice_states.append((combos, sl))
+
+    # viterbi: keep every slice's cost vector so backtracking is a plain walk
+    INF = float("inf")
+    all_costs = []
+    backptr = []
+    prev_costs = None
+    prev_combos = None
+    prev_time = None
+    for combos, sl in slice_states:
+        if not combos:
+            all_costs.append([])
+            backptr.append([])
+            continue
+        t = sl[0]["start"]
+        costs = []
+        bp = []
+        for u, combo in combos:
+            pos = hand_pos(combo)
+            if prev_costs is None:
+                costs.append(u + (pos or 0) * 0.02)
+                bp.append(-1)
+                continue
+            dt = max(0.0, t - prev_time)
+            move_w = 1.3 if dt < 0.2 else (0.8 if dt < 0.6 else (0.35 if dt < 1.5 else 0.12))
+            best, best_i = INF, -1
+            for i, (_, pcombo) in enumerate(prev_combos):
+                ppos = hand_pos(pcombo)
+                trans = 0.0
+                if pos is not None and ppos is not None:
+                    trans += abs(pos - ppos) * move_w
+                if len(combo) == 1 and len(pcombo) == 1 and dt < 0.35:
+                    trans += abs(combo[0][0] - pcombo[0][0]) * 0.18
+                    if combo[0][1] > 0 and pcombo[0][1] > 0 and combo[0][0] == pcombo[0][0]:
+                        trans -= 0.1
+                c = prev_costs[i] + trans
+                if c < best:
+                    best, best_i = c, i
+            costs.append(best + u)
+            bp.append(best_i)
+        all_costs.append(costs)
+        backptr.append(bp)
+        prev_costs, prev_combos, prev_time = costs, combos, t
+
+    assigned = []
+    choice = None
+    for k in range(len(slice_states) - 1, -1, -1):
+        combos, sl = slice_states[k]
+        if not combos:
+            continue
+        if choice is None or choice < 0:
+            costs_k = all_costs[k]
+            choice = int(min(range(len(costs_k)), key=lambda i: costs_k[i]))
+        combo = combos[choice][1]
+        for n, (s, f) in zip(sl, combo):
+            assigned.append(dict(n, string=s, fret=f))
+        choice = backptr[k][choice]
+    assigned.sort(key=lambda x: (x["start"], x["string"]))
+    return assigned
+
+
+# ---------------------------------------------------------------------------
+# ascii + midi
+# ---------------------------------------------------------------------------
+
+def ascii_tab(notes, measures, beats, string_names, chords=None, beats_per_bar=4, bars_per_line=2):
+    if not measures:
+        return "\n".join(f"{name:2s}|---|" for name in string_names)
+    n_strings = len(string_names)
+    cols_per_beat = 4
+    col_w = 3
+    lines_out = []
+    chords = chords or []
+
+    def chord_at(t):
+        for c in chords:
+            if c["start"] - 0.03 <= t < c["end"]:
+                return c["name"]
+        return None
+
+    for chunk_start in range(0, len(measures), bars_per_line):
+        chunk = measures[chunk_start:chunk_start + bars_per_line]
+        header_cells = []
+        rows = {s: [] for s in range(1, n_strings + 1)}
+        chord_row = []
+        for m in chunk:
+            cols = beat_subdivisions(m["start"], m["end"], beats, cols_per_beat)
+            grid = {s: ["-" * col_w for _ in cols] for s in range(1, n_strings + 1)}
+            crow = [" " * col_w for _ in cols]
+            m_notes = [n for n in notes if m["start"] - 1e-6 <= n["start"] < m["end"] - 1e-6]
+            for n in m_notes:
+                ci = min(range(len(cols)), key=lambda i: abs(cols[i] - n["start"]))
+                s = n["string"]
+                if s not in grid:
+                    continue
+                if grid[s][ci] != "-" * col_w and ci + 1 < len(cols) and grid[s][ci + 1] == "-" * col_w:
+                    ci += 1
+                art = n.get("articulation")
+                prefix = {"hammer": "h", "pull": "p", "slide": "/"}.get(art, "")
+                txt = f"{prefix}{n['fret']}"
+                grid[s][ci] = (txt + "-" * col_w)[:col_w]
+            last_chord = None
+            for i, t in enumerate(cols):
+                c = chord_at(t) if chords else None
+                if c and c != last_chord:
+                    crow[i] = (c + " " * col_w)[:col_w] if len(c) <= col_w else c
+                    last_chord = c
+            mm = int(m["start"] // 60)
+            ss = int(m["start"] % 60)
+            header_cells.append(f"Bar {m['number']} [{mm:02d}:{ss:02d}]")
+            for s in rows:
+                rows[s].append("".join(grid[s]))
+            chord_row.append("".join(crow))
+        lines_out.append("   " + "   ".join(f"{h:<{len(chord_row[i])}}" for i, h in enumerate(header_cells)))
+        if chords and any(c.strip() for c in chord_row):
+            lines_out.append("   " + "|" + "|".join(chord_row) + "|")
+        for s_idx, name in enumerate(string_names):
+            s = s_idx + 1
+            lines_out.append(f"{name:2s} |" + "|".join(rows[s]) + "|")
+        lines_out.append("")
+    return "\n".join(lines_out).rstrip() + "\n"
+
+
+def export_midi(notes, path, bpm, instrument, tuning_pitches, beats_per_bar=4):
+    try:
+        import pretty_midi
+
+        pm = pretty_midi.PrettyMIDI(initial_tempo=float(bpm))
+        pm.time_signature_changes.append(pretty_midi.TimeSignature(beats_per_bar, 4, 0))
+        is_bass = instrument == "bass"
+        program = pretty_midi.instrument_name_to_program("Electric Bass (finger)" if is_bass else "Acoustic Guitar (steel)")
+        n_strings = len(tuning_pitches)
+        label = "Bass" if is_bass else "Guitar"
+        tracks = [pretty_midi.Instrument(program=program, name=f"{label} string {s}") for s in range(1, n_strings + 1)]
+        for n in notes:
+            idx = max(0, min(n_strings - 1, n["string"] - 1))
+            vel = int(round(max(28, min(127, n.get("amplitude", 0.8) * 127))))
+            tracks[idx].notes.append(pretty_midi.Note(velocity=vel, pitch=int(n["pitch"]), start=float(n["start"]),
+                                                      end=float(max(n["start"] + 0.06, n["end"]))))
+        for tr in tracks:
+            if tr.notes:
+                pm.instruments.append(tr)
+        pm.write(path)
+        return True
+    except Exception as e:
+        emit(type="info", message=f"MIDI export failed: {e}")
+        return False
+
+
+# ---------------------------------------------------------------------------
+# MIDI import
+# ---------------------------------------------------------------------------
+
+def list_midi_tracks(path):
+    import pretty_midi
+
+    pm = pretty_midi.PrettyMIDI(path)
+    tracks = []
+    for i, inst in enumerate(pm.instruments):
+        if not inst.notes:
+            continue
+        pitches = [n.pitch for n in inst.notes]
+        try:
+            program_name = pretty_midi.program_to_instrument_name(inst.program)
+        except Exception:
+            program_name = f"Program {inst.program}"
+        tracks.append({
+            "index": i,
+            "name": inst.name or program_name,
+            "program": int(inst.program),
+            "programName": program_name,
+            "isDrum": bool(inst.is_drum),
+            "noteCount": len(inst.notes),
+            "pitchLow": midi_name(min(pitches)),
+            "pitchHigh": midi_name(max(pitches)),
+            "start": round(float(min(n.start for n in inst.notes)), 2),
+            "end": round(float(max(n.end for n in inst.notes)), 2),
+        })
+    return {
+        "duration": round(float(pm.get_end_time()), 2),
+        "bpm": round(float(pm.estimate_tempo()), 1) if pm.instruments else 120.0,
+        "tracks": tracks,
+    }
+
+
+def notes_from_midi(path, track_sel, offset, transpose, lowest, highest):
+    import pretty_midi
+
+    pm = pretty_midi.PrettyMIDI(path)
+    chosen = []
+    for i, inst in enumerate(pm.instruments):
+        if inst.is_drum:
+            continue
+        if track_sel == "all" or str(i) == str(track_sel):
+            chosen.append(inst)
+    raw = []
+    for inst in chosen:
+        for n in inst.notes:
+            raw.append((n.start, n.end, n.pitch, n.velocity))
+    if not raw:
+        fail("The selected MIDI track has no notes.")
+
+    def in_range(shift):
+        return sum(1 for _, _, p, _ in raw if lowest <= p + transpose + shift <= highest) / len(raw)
+
+    best_shift = max((0, -12, 12, -24, 24), key=lambda s: (round(in_range(s), 3), -abs(s)))
+    notes = []
+    for s, e, p, v in raw:
+        pitch = p + transpose + best_shift
+        if not (lowest <= pitch <= highest):
+            continue
+        notes.append({
+            "start": round(float(s + offset), 3),
+            "end": round(float(max(s + 0.05, e) + offset), 3),
+            "pitch": int(pitch),
+            "amplitude": round(max(0.2, min(1.0, v / 127.0)), 3),
+        })
+    notes = [n for n in notes if n["end"] > 0]
+    for n in notes:
+        n["start"] = max(0.0, n["start"])
+    notes.sort(key=lambda n: (n["start"], n["pitch"]))
+
+    # grid from the MIDI file itself
+    try:
+        beats = [round(float(b + offset), 4) for b in pm.get_beats() if b + offset >= 0]
+        downs = [round(float(d + offset), 4) for d in pm.get_downbeats() if d + offset >= 0]
+        ts = pm.time_signature_changes
+        beats_per_bar = int(ts[0].numerator) if ts else 4
+        bpm = float(pm.estimate_tempo()) if len(raw) > 4 else 120.0
+        if pm.get_tempo_changes()[1].size:
+            bpm = float(pm.get_tempo_changes()[1][0])
+    except Exception:
+        beats, downs, beats_per_bar, bpm = [], [], 4, 120.0
+    phase = 0
+    if beats and downs:
+        try:
+            phase = min(range(len(beats)), key=lambda i: abs(beats[i] - downs[0]))
+        except ValueError:
+            phase = 0
+    return notes, beats, phase, beats_per_bar, bpm, best_shift
+
+
+# ---------------------------------------------------------------------------
+# main
+# ---------------------------------------------------------------------------
+
 def main():
-    parser = argparse.ArgumentParser(description="Transcribe guitar/bass audio stem into playable tablature")
-    parser.add_argument("--input", required=True, help="Path to audio WAV file")
-    parser.add_argument("--out", required=True, help="Path to output tabs JSON")
-    parser.add_argument("--instrument", default="guitar", choices=["guitar", "bass"], help="Instrument type (guitar or bass)")
-    parser.add_argument("--mode", default="chord", choices=["chord", "note"], help="Transcription mode: chord (default) or note (Basic Pitch)")
-    parser.add_argument("--voicing", default="standard", choices=["standard", "barre", "power"], help="Guitar chord voicing style")
-    parser.add_argument("--tuning", default="standard", help="Tuning preset (standard, drop_d, half_step_down, etc.)")
-    parser.add_argument("--position", default="auto", help="Position anchor preset (auto, open, mid, high, octave)")
-    parser.add_argument("--sensitivity", default="clean", help="Detection mode: clean (default) or sensitive")
-    parser.add_argument("--onset-thresh", type=float, default=None, help="Onset activation threshold")
-    parser.add_argument("--frame-thresh", type=float, default=None, help="Frame activation threshold")
-    parser.add_argument("--min-note-len", type=int, default=None, help="Minimum note length in milliseconds")
-    parser.add_argument("--device", default="auto", help="Compute device (auto, cpu, cuda)")
+    parser = argparse.ArgumentParser(description="Guitar / bass tablature engine")
+    parser.add_argument("--input", help="Isolated stem WAV")
+    parser.add_argument("--mix", default=None, help="Full mix WAV (for beat tracking)")
+    parser.add_argument("--out", help="Output tabs JSON")
+    parser.add_argument("--instrument", default="guitar", choices=["guitar", "bass"])
+    parser.add_argument("--mode", default="auto", help="auto | lead | poly | chord (bass is always lead)")
+    parser.add_argument("--voicing", default="standard", choices=["standard", "barre", "power"])
+    parser.add_argument("--tuning", default="standard")
+    parser.add_argument("--position", default="auto")
+    parser.add_argument("--sensitivity", default="clean")
+    parser.add_argument("--device", default="auto")
+    parser.add_argument("--beats-per-bar", type=int, default=4)
+    parser.add_argument("--from-midi", default=None, help="Build the tab from this MIDI file instead of audio")
+    parser.add_argument("--midi-track", default="all")
+    parser.add_argument("--midi-offset", type=float, default=0.0)
+    parser.add_argument("--transpose", type=int, default=0)
+    parser.add_argument("--list-midi-tracks", default=None, help="Print the tracks of a MIDI file and exit")
+    parser.add_argument("--downbeat-phase", type=int, default=None, help="Override which tracked beat starts bar 1 (0..beats-per-bar-1)")
+    parser.add_argument("--rebuild-from", default=None,
+                        help="Reuse the notes/beats of an existing tabs JSON and only rebuild bars, ASCII and MIDI")
     args = parser.parse_args()
 
-    if not os.path.isfile(args.input):
+    if args.list_midi_tracks:
+        try:
+            info = list_midi_tracks(args.list_midi_tracks)
+        except Exception as e:
+            fail(f"Could not read MIDI file: {e}")
+        emit(type="tracks", **info)
+        os._exit(0)
+
+    if not args.out:
+        fail("--out is required")
+    if not args.from_midi and not args.rebuild_from and not (args.input and os.path.isfile(args.input)):
         fail(f"Input file does not exist: {args.input}")
 
-    total_duration = get_wav_duration(args.input)
-    is_bass = (args.instrument == "bass")
-
-    # Tuning selection
-    tuning_key = args.tuning.lower()
+    is_bass = args.instrument == "bass"
+    tunings = BASS_TUNINGS if is_bass else GUITAR_TUNINGS
+    tuning_pitches, tuning_names = tunings.get(args.tuning.lower(), tunings["standard"])
+    max_fret = 20 if is_bass else 22
+    lowest = min(tuning_pitches)
+    highest = max(tuning_pitches) + max_fret
+    forced_pos = POSITION_PRESETS.get(args.position.lower(), None)
+    sensitivity = "sensitive" if args.sensitivity.lower() == "sensitive" else "clean"
+    mode = args.mode.lower()
     if is_bass:
-        if tuning_key in BASS_TUNING_PRESETS:
-            tuning_pitches, tuning_names = BASS_TUNING_PRESETS[tuning_key]
-        else:
-            tuning_pitches, tuning_names = BASS_TUNING_PRESETS["standard"]
-    else:
-        if tuning_key in TUNING_PRESETS:
-            tuning_pitches, tuning_names = TUNING_PRESETS[tuning_key]
-        else:
-            tuning_pitches, tuning_names = TUNING_PRESETS["standard"]
+        mode = "lead"
+    elif mode in ("auto", "note"):
+        mode = "poly"
+    if mode not in ("lead", "poly", "chord"):
+        mode = "poly"
 
-    # Bass is naturally monophonic single-note groove playing
-    if is_bass or args.mode == "note":
-        emit(type="progress", pct=5, message=f"Loading Basic Pitch {'bass' if is_bass else 'guitar'} solver…")
-        forced_pos = POSITION_PRESETS.get(args.position.lower(), None)
-        is_sensitive = args.sensitivity.lower() == "sensitive"
-        onset_thresh = args.onset_thresh if args.onset_thresh is not None else (0.50 if is_sensitive else 0.60)
-        frame_thresh = args.frame_thresh if args.frame_thresh is not None else (0.32 if is_sensitive else 0.40)
-        min_note_len = args.min_note_len if args.min_note_len is not None else (65 if is_sensitive else (85 if is_bass else 90))
+    duration = wav_duration(args.input) if args.input and os.path.isfile(args.input) else 0.0
+    beats_per_bar = max(2, min(7, args.beats_per_bar))
 
+    chords = []
+    source = "audio"
+    midi_meta = {}
+
+    if args.rebuild_from:
         try:
-            from basic_pitch.inference import predict
-        except ImportError:
-            fail("basic-pitch is not installed in the Python environment.")
-
-        emit(type="progress", pct=10, message=f"Analyzing {'bass' if is_bass else 'guitar'} track & estimating tempo…")
-
-        bpm = 120.0
-        try:
-            import soundfile as sf
-            import librosa
-            import numpy as np
-
-            sample_dur = min(45.0, total_duration) if total_duration > 0 else 45.0
-            frames_to_read = int(sample_dur * 44100)
-            audio_data, sr = sf.read(args.input, frames=frames_to_read)
-            if audio_data.ndim > 1:
-                audio_data = audio_data.mean(axis=1)
-
-            tempo, _ = librosa.beat.beat_track(y=audio_data, sr=sr)
-            detected_bpm = float(tempo[0]) if isinstance(tempo, (list, np.ndarray)) else float(tempo)
-            if 45.0 <= detected_bpm <= 240.0:
-                bpm = round(detected_bpm, 1)
+            with open(args.rebuild_from, "r", encoding="utf-8") as f:
+                prev = json.load(f)
         except Exception as e:
-            emit(type="info", message=f"Tempo detection fallback used: {e}")
+            fail(f"Could not read existing tab data: {e}")
+        assigned = prev.get("notes", [])
+        beats = prev.get("beats") or []
+        beats_per_bar = int(prev.get("beatsPerBar") or beats_per_bar)
+        if args.beats_per_bar != 4:
+            beats_per_bar = max(2, min(7, args.beats_per_bar))
+        phase = int(prev.get("downbeatPhase") or 0)
+        if args.downbeat_phase is not None:
+            phase = args.downbeat_phase % beats_per_bar
+        bpm = float(prev.get("bpm") or 120.0)
+        duration = float(prev.get("duration") or duration or max((n["end"] for n in assigned), default=0.0))
+        chords = prev.get("chords") or []
+        source = prev.get("source", "audio")
+        engine = prev.get("engine") or prev.get("model") or "StemKit tab engine"
+        mode = prev.get("mode", mode)
+        tuning_names = prev.get("tuning") or tuning_names
+        tuning_pitches = prev.get("tuningPitches") or tuning_pitches
+        midi_meta = {k: prev[k] for k in ("midiFile", "midiTrack", "midiOffset", "transpose") if k in prev}
+        if not beats:
+            beats, phase, bpm, _ = track_beats(None, None, duration, beats_per_bar)
+        measures = build_measures(beats, phase, beats_per_bar, duration)
+        progress(60, "Rebuilding bars…")
+    elif args.from_midi:
+        progress(5, "Reading MIDI file…")
+        notes, beats, phase, bpb, bpm, shift = notes_from_midi(
+            args.from_midi, args.midi_track, args.midi_offset, args.transpose, lowest, highest
+        )
+        beats_per_bar = bpb or beats_per_bar
+        if not duration:
+            duration = max((n["end"] for n in notes), default=0.0) + 1.0
+        if not beats or len(beats) < 4:
+            beats, phase, bpm, _ = track_beats(None, None, duration, beats_per_bar)
+        if args.downbeat_phase is not None:
+            phase = args.downbeat_phase % beats_per_bar
+        bpm = round(bpm, 1)
+        measures = build_measures(beats, phase, beats_per_bar, max(duration, max((n["end"] for n in notes), default=0.0)))
+        source = "midi"
+        midi_meta = {
+            "midiFile": os.path.abspath(args.from_midi),
+            "midiTrack": args.midi_track,
+            "midiOffset": args.midi_offset,
+            "transpose": args.transpose + shift,
+        }
+        engine = "MIDI import"
+        mode = "poly" if not is_bass else "lead"
+        progress(40, f"Solving fingerings for {len(notes)} notes…")
+        assigned = solve_fingering(notes, tuning_pitches, forced_pos, max_fret, is_bass)
+    else:
+        progress(3, "Loading audio…")
+        y, sr = load_mono(args.input)
+        if duration <= 0:
+            duration = len(y) / sr
 
-        emit(type="progress", pct=25, message=f"Detecting clean {'bass' if is_bass else 'guitar'} notes ({bpm} BPM)…")
+        progress(6, "Tracking beats on the full mix…")
+        beats, phase, bpm, grid_source = track_beats(args.mix, args.input, duration, beats_per_bar)
+        if args.downbeat_phase is not None:
+            phase = args.downbeat_phase % beats_per_bar
+        measures = build_measures(beats, phase, beats_per_bar, duration)
 
-        min_freq = 30.0 if is_bass else 75.0
-        max_freq = 650.0 if is_bass else 1250.0
-
-        try:
-            model_output, midi_data, raw_notes = predict(
-                args.input,
-                onset_threshold=onset_thresh,
-                frame_threshold=frame_thresh,
-                minimum_note_length=min_note_len,
-                minimum_frequency=min_freq,
-                maximum_frequency=max_freq,
-                melodia_trick=True
+        if mode == "chord":
+            raw, chords, engine = transcribe_chords(
+                y, sr, beats, measures, tuning_pitches, args.voicing, sensitivity, duration, progress_base=12
             )
-        except Exception as e:
-            fail(f"Basic Pitch transcription failed: {e}")
+            assigned = raw  # voicings already carry string/fret
+        elif mode == "lead":
+            raw, engine = transcribe_lead(y, sr, args.instrument, sensitivity, args.device, progress_base=12)
+            raw = [n for n in raw if lowest <= n["pitch"] <= highest]
+            progress(70, f"Solving fingerings for {len(raw)} notes…")
+            assigned = solve_fingering(raw, tuning_pitches, forced_pos, max_fret, is_bass)
+        else:
+            raw, engine = transcribe_poly(args.input, y, sr, sensitivity, args.device, lowest, highest, progress_base=12)
+            progress(72, f"Solving fingerings for {len(raw)} notes…")
+            assigned = solve_fingering(raw, tuning_pitches, forced_pos, max_fret, is_bass)
+        engine = f"{engine} · beat grid from {grid_source}"
 
-        emit(type="progress", pct=60, message="Filtering acoustic overtones & ghost notes…")
-        clean_notes = filter_harmonics_and_clean(raw_notes, min_dur=0.08)
-
-        emit(type="progress", pct=75, message=f"Solving ergonomic hand positions for {len(clean_notes)} notes…")
-        assigned_notes = solve_position_anchored_tab(
-            clean_notes,
-            tuning_pitches=tuning_pitches,
-            forced_position=forced_pos,
-            max_fret=24 if is_bass else 22
-        )
-
-        emit(type="progress", pct=88, message="Quantizing measures onto musical 16th-note grid…")
-        measures = build_measures(assigned_notes, bpm=bpm, total_duration=total_duration)
-        ascii_tab = generate_quantized_ascii_tab(
-            assigned_notes,
-            string_names=tuning_names,
-            bpm=bpm,
-            total_duration=total_duration
-        )
-        model_name = f"Spotify Basic Pitch + Position-Anchored {'Bass' if is_bass else 'Fretboard'} Solver"
-    else:
-        # Guitar chord mode
-        emit(type="progress", pct=5, message="Starting Chord-Aware & Rhythm Guitar Tab Engine…")
-        bpm, assigned_notes, measures, ascii_tab = transcribe_chord_and_rhythm_tabs(
-            args.input,
-            tuning_pitches=tuning_pitches,
-            tuning_names=tuning_names,
-            voicing_style=args.voicing,
-            total_duration=total_duration
-        )
-        model_name = "StemKit Chord-Aware & Rhythm Tab Engine (Authentic Voicings)"
+    progress(88, "Rendering tablature…")
+    for n in assigned:
+        n["string"] = int(n["string"])
+        n["fret"] = int(n["fret"])
+    for m in measures:
+        m["notes"] = [n for n in assigned if m["start"] - 1e-6 <= n["start"] < m["end"] - 1e-6]
+        if chords:
+            inside = [c["name"] for c in chords if c["start"] < m["end"] and c["end"] > m["start"]]
+            if inside:
+                # dominant chord of the bar
+                best, best_len = None, 0.0
+                for c in chords:
+                    ov = min(c["end"], m["end"]) - max(c["start"], m["start"])
+                    if ov > best_len:
+                        best, best_len = c["name"], ov
+                m["chord"] = best
+    text = ascii_tab(assigned, measures, beats, tuning_names, chords, beats_per_bar)
 
     out_dir = os.path.dirname(os.path.abspath(args.out))
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
-
     midi_path = os.path.splitext(args.out)[0] + ".mid"
-    export_guitar_tab_midi(assigned_notes, midi_path, bpm=bpm, instrument=args.instrument, tuning_pitches=tuning_pitches)
+    export_midi(assigned, midi_path, bpm, args.instrument, tuning_pitches, beats_per_bar)
 
-    emit(type="progress", pct=95, message=f"Writing {'bass' if is_bass else 'guitar'} tablature data…")
-
-    out_data = {
+    progress(95, "Writing tablature data…")
+    out = {
         "instrument": args.instrument,
-        "model": model_name,
+        "engine": engine,
+        "model": engine,
+        "source": source,
         "bpm": bpm,
-        "mode": "note" if is_bass else args.mode,
+        "mode": mode,
         "voicingStyle": args.voicing,
         "tuning": tuning_names,
+        "tuningId": args.tuning.lower(),
         "tuningPitches": tuning_pitches,
         "positionAnchor": args.position,
-        "sensitivity": args.sensitivity,
-        "duration": round(total_duration, 2),
-        "notesCount": len(assigned_notes),
+        "sensitivity": sensitivity,
+        "duration": round(duration, 2),
+        "beatsPerBar": beats_per_bar,
+        "beats": beats,
+        "downbeatPhase": phase,
+        "chords": chords,
+        "notesCount": len(assigned),
         "midiPath": midi_path if os.path.isfile(midi_path) else None,
-        "notes": assigned_notes,
+        "notes": assigned,
         "measures": measures,
-        "asciiTab": ascii_tab
+        "asciiTab": text,
+        **midi_meta,
     }
-
     with open(args.out, "w", encoding="utf-8") as f:
-        json.dump(out_data, f, ensure_ascii=False, indent=2)
+        json.dump(out, f, ensure_ascii=False, indent=1)
 
-    emit(type="progress", pct=100, message=f"Playable {'bass' if is_bass else 'guitar'} tablature ready")
-    emit(
-        type="done",
-        out=args.out,
-        midi=midi_path,
-        notes_count=len(assigned_notes),
-        bpm=bpm
-    )
-    # Clean exit without OpenMP/static destructor mutex locks on Python 3.14
+    progress(100, f"{'Bass' if is_bass else 'Guitar'} tablature ready")
+    emit(type="done", out=args.out, midi=midi_path, notes_count=len(assigned), bpm=bpm)
     os._exit(0)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as exc:  # pragma: no cover
+        fail(f"{type(exc).__name__}: {exc}")

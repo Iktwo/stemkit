@@ -23,6 +23,10 @@ Everything runs locally — no accounts, no cloud, no API keys.
 - Persistent mini player for seamless listening while browsing or fetching new tracks
 - One-click presets: **All · Karaoke · Acapella · Drums + Bass**
 - Per-stem mute/solo/volume, waveforms with click-to-seek
+- **Guitar & bass tablature** transcribed from the isolated stems, synced to the song: scrolling tab with beat-accurate bars, chord names, hammer-on / pull-off / slide marks, live fretboard, text tab, MIDI export
+- **Import a MIDI file** (Guitar Pro / DAW export, or one you downloaded) and get a fingered tab for it — the reliable path when you already have the notes
+- **Practice tools**: A-B loop (click a bar number to loop it), slow-down speed, play the tab with a synth in sync, or render it into a mixer lane and play along with the original muted
+- Synchronized karaoke lyrics with an editor
 - Parallel background splitting with live progress
 - Export any stem (or all) as WAV
 - Fully offline after setup — separation runs on Apple Silicon (MPS), NVIDIA GPUs (CUDA) or CPU; ffmpeg included
@@ -39,6 +43,8 @@ Optional quality upgrades live behind a gear icon in the app (Settings), each wi
 - **Studio-quality vocals** (Mel-Band Roformer): +913 MB — runs on GPU or CPU (CPU is slower)
 - **Fine-tuned demucs** (htdemucs_ft): +~320 MB, up to 4× slower
 - **Refinement passes**: 2 shifts instead of 1, up to 3× slower
+
+The tablature engine installs itself the first time you open a tab stage (~150 MB: Basic Pitch on ONNX Runtime, CREPE, librosa).
 
 > **macOS first launch**: builds are signed with a Developer ID but not notarized, so macOS may say it "cannot verify the developer". One-time fix: **System Settings → Privacy & Security → Open Anyway** (or `xattr -cr /Applications/StemKit.app`).
 >
@@ -92,10 +98,26 @@ Without these secrets CI falls back to ad-hoc signing (app runs, but Gatekeeper 
 
 ```
 YouTube URL ──► yt-dlp (+JS runtime) ──► bundled ffmpeg ──► BS-RoFormer / Demucs FT ──► stems/*.wav
-                                        │
-Electron renderer ◄──── IPC events ─────┘
-Local Web Audio API stem playback · per-stem volume / solo / mute faders
+                                        │                                                 │
+Electron renderer ◄──── IPC events ─────┘                     tab_transcribe.py ◄─────────┘
+Local Web Audio API stem playback · per-stem volume / solo / mute faders · synth lanes
 ```
+
+### Tablature engine
+
+`python/tab_transcribe.py` turns a stem (or a MIDI file) into a tab:
+
+| Stage | What runs |
+|---|---|
+| Beat grid | `librosa` beat tracking on the **full mix** (drums make it robust), downbeat voted from chord changes + accents; bars follow the tracked beats instead of a single fixed BPM, so they never drift. Nudge the bar start from the footer if it lands a beat off. |
+| Bass | pYIN f0 tracking (long analysis frames built for the low register) + onset detection + legato segmentation; octave errors repaired against the harmonic series in a CQT. |
+| Guitar · notes & riffs | Spotify **Basic Pitch** (ONNX Runtime, works on every platform) anchored to a CREPE pitch contour to repair octave errors, then a harmonic ghost-note filter. |
+| Guitar · single-note lead | CREPE (tiny on CPU/MPS, full on CUDA) with pYIN fallback, same segmentation as bass. |
+| Guitar · chords & strums | Beat-synchronous chroma → Viterbi chord decoding (maj, min, 7, maj7, m7, sus2, sus4, 5) → open / barre / power voicings placed on the strum onsets actually in the audio. |
+| Fingering | Viterbi over (string, fret) candidates: playable spans, hand-position inertia scaled by the time available to move, open-string and low-position preferences. |
+| MIDI import | Any `.mid` track → octave-fitted to the instrument → same fingering solver; bars come from the file's tempo map. |
+
+Set `STEMKIT_F0_TRACKER=pyin` or `STEMKIT_CREPE_MODEL=full` in the environment to override the tracker choices.
 
 ## Notes
 
@@ -108,7 +130,8 @@ Local Web Audio API stem playback · per-stem volume / solo / mute faders
 src/main         Electron main process (pipeline, env bootstrap, library)
 src/preload      IPC bridge
 src/renderer     React UI (player, waveforms, mini player, audio engine)
-python/          separate.py (BS-RoFormer / demucs) with JSON progress output
+python/          separate.py (BS-RoFormer / demucs), transcribe.py (lyrics), tab_transcribe.py (tabs) — JSON progress output
+python/tests/    synthetic ground-truth check for the tab engine
 python/vendor/   vendor model code
 scripts/         node runner, ffmpeg fetchers
 build/           icon sources

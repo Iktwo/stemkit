@@ -29,7 +29,18 @@ import {
   tabPath,
   loadTabs
 } from './library'
-import { MODEL_EXTENDED, type JobEvent, type JobStage, type KaraokeData, type GuitarTabData } from '../shared/types'
+import {
+  MODEL_EXTENDED,
+  type JobEvent,
+  type JobStage,
+  type KaraokeData,
+  type GuitarTabData,
+  type TabInstrument,
+  type TabTranscribeOptions,
+  type TabRebuildOptions,
+  type TabMidiImportOptions,
+  type MidiFileInfo
+} from '../shared/types'
 import { parseVideoId } from '../shared/url'
 import { cacheThumbnail } from './thumbs'
 
@@ -654,83 +665,44 @@ export function sendTabProgress(
   videoId: string,
   pct: number,
   message?: string,
-  instrument: 'guitar' | 'bass' = 'guitar'
+  instrument: TabInstrument = 'guitar'
 ): void {
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send('tab:progress', { videoId, pct, message, instrument })
   }
 }
 
-export async function transcribeGuitarTab(
-  videoId: string,
-  tuning = 'standard',
-  position = 'auto',
-  sensitivity = 'clean',
-  mode = 'chord',
-  voicing = 'standard',
-  force = false,
-  instrument: 'guitar' | 'bass' = 'guitar'
-): Promise<GuitarTabData> {
-  const existing = loadTabs(videoId, instrument)
-  if (existing && !force) {
-    return existing
-  }
-
-  const flightKey = `${videoId}_${instrument}`
-  const existingInFlight = activeTabTranscriptions.get(flightKey)
-  if (existingInFlight) {
-    return existingInFlight
-  }
-
-  const stemFilename = instrument === 'bass' ? 'bass.wav' : 'guitar.wav'
-  const audioPath = join(stemsDir(videoId), stemFilename)
-  if (!existsSync(audioPath)) {
-    throw new Error(
-      `${instrument === 'bass' ? 'Bass' : 'Guitar'} stem not found. Please reprocess this song with the ${instrument} stem selected.`
-    )
-  }
-
-  const outPath = tabPath(videoId, instrument)
+function tabDeviceArg(): string {
   const settings = loadSettings()
   const useGpu = settings.gpuSplit && process.platform === 'win32'
-  const deviceArg = process.platform === 'win32' ? (useGpu ? 'cuda' : 'cpu') : 'auto'
+  return process.platform === 'win32' ? (useGpu ? 'cuda' : 'cpu') : 'auto'
+}
+
+/* one tab-engine run per (song, instrument) at a time; every entry point
+   (audio analysis, MIDI import, bar rebuild) funnels through here so progress
+   and error reporting are identical */
+function runTabEngine(
+  videoId: string,
+  instrument: TabInstrument,
+  args: string[],
+  startMessage: string
+): Promise<GuitarTabData> {
+  const flightKey = `${videoId}_${instrument}`
+  const inFlight = activeTabTranscriptions.get(flightKey)
+  if (inFlight) return inFlight
 
   const task = (async () => {
-    const instLabel = instrument === 'bass' ? 'bass' : 'guitar'
-    sendTabProgress(videoId, 0, `Checking ${instLabel} tab engine dependencies…`, instrument)
-    await ensureTabEngineDeps()
-
+    sendTabProgress(videoId, 0, 'Checking the tablature engine…', instrument)
+    if (!(await ensureTabEngineDeps())) {
+      throw new Error('The tablature engine could not be installed. Check your connection and try again.')
+    }
     return new Promise<GuitarTabData>((resolve, reject) => {
-      sendTabProgress(videoId, 5, `Starting ${instLabel} transcription…`, instrument)
-
-      const child = spawn(
-        venvPython(),
-        [
-          tabScript(),
-          '--input',
-          audioPath,
-          '--out',
-          outPath,
-          '--instrument',
-          instrument,
-          '--mode',
-          instrument === 'bass' ? 'note' : mode,
-          '--voicing',
-          voicing,
-          '--tuning',
-          tuning,
-          '--position',
-          position,
-          '--sensitivity',
-          sensitivity,
-          '--device',
-          deviceArg
-        ],
-        { env: { ...process.env } }
-      )
+      sendTabProgress(videoId, 3, startMessage, instrument)
+      const child = spawn(venvPython(), [tabScript(), ...args, '--device', tabDeviceArg()], {
+        env: { ...process.env }
+      })
 
       let scriptError: string | null = null
-
       if (child.stdout) {
         const rl = createInterface({ input: child.stdout })
         rl.on('line', (line) => {
@@ -744,42 +716,171 @@ export async function transcribeGuitarTab(
           } catch {}
         })
       }
-
       let stderrTail = ''
       child.stderr?.on('data', (chunk: Buffer) => {
         stderrTail = (stderrTail + chunk.toString()).slice(-2000)
       })
-
-      child.on('error', (err) => {
-        activeTabTranscriptions.delete(flightKey)
-        reject(err)
-      })
-
+      child.on('error', reject)
       child.on('close', (code) => {
-        activeTabTranscriptions.delete(flightKey)
         if (code === 0) {
           const loaded = loadTabs(videoId, instrument)
           if (loaded) {
-            sendTabProgress(
-              videoId,
-              100,
-              `${instrument === 'bass' ? 'Bass' : 'Guitar'} tablature ready`,
-              instrument
-            )
+            sendTabProgress(videoId, 100, `${instrument === 'bass' ? 'Bass' : 'Guitar'} tablature ready`, instrument)
             return resolve(loaded)
           }
-          return reject(new Error('Transcription finished but tabs file was not created.'))
+          return reject(new Error('The engine finished but no tablature file was written.'))
         }
-        reject(
-          new Error(
-            scriptError || `Tab transcription failed with exit code ${code}: ${stderrTail.slice(0, 300)}`
-          )
-        )
+        const detail = stderrTail
+          .split('\n')
+          .map((l) => l.trim())
+          .filter((l) => l && !/^WARNING/.test(l))
+          .slice(-2)
+          .join(' — ')
+        reject(new Error(scriptError || `Tab engine exited with code ${code}${detail ? `: ${detail}` : ''}`))
       })
     })
-  })()
+  })().finally(() => activeTabTranscriptions.delete(flightKey))
 
   activeTabTranscriptions.set(flightKey, task)
   return task
 }
 
+function stemPathFor(videoId: string, instrument: TabInstrument): string {
+  const audioPath = join(stemsDir(videoId), `${instrument}.wav`)
+  if (!existsSync(audioPath)) {
+    throw new Error(
+      `${instrument === 'bass' ? 'Bass' : 'Guitar'} stem not found. Reprocess this song with the ${instrument} stem selected.`
+    )
+  }
+  return audioPath
+}
+
+function optionalArgs(pairs: Array<[string, string | number | undefined | null]>): string[] {
+  const out: string[] = []
+  for (const [flag, value] of pairs) {
+    if (value === undefined || value === null || value === '') continue
+    out.push(flag, String(value))
+  }
+  return out
+}
+
+export async function transcribeGuitarTab(videoId: string, opts: TabTranscribeOptions): Promise<GuitarTabData> {
+  const instrument = opts.instrument
+  const audioPath = stemPathFor(videoId, instrument)
+  const mix = mixWavPath(videoId)
+  return runTabEngine(
+    videoId,
+    instrument,
+    [
+      '--input',
+      audioPath,
+      '--out',
+      tabPath(videoId, instrument),
+      '--instrument',
+      instrument,
+      ...(existsSync(mix) ? ['--mix', mix] : []),
+      ...optionalArgs([
+        ['--mode', instrument === 'bass' ? 'lead' : opts.mode],
+        ['--voicing', opts.voicing],
+        ['--tuning', opts.tuning],
+        ['--position', opts.position],
+        ['--sensitivity', opts.sensitivity],
+        ['--beats-per-bar', opts.beatsPerBar],
+        ['--downbeat-phase', opts.downbeatPhase]
+      ])
+    ],
+    `Analyzing the ${instrument} stem…`
+  )
+}
+
+export async function rebuildGuitarTab(
+  videoId: string,
+  instrument: TabInstrument,
+  opts: TabRebuildOptions
+): Promise<GuitarTabData> {
+  const file = tabPath(videoId, instrument)
+  if (!existsSync(file)) throw new Error('No tablature to rebuild yet.')
+  return runTabEngine(
+    videoId,
+    instrument,
+    [
+      '--rebuild-from',
+      file,
+      '--out',
+      file,
+      '--instrument',
+      instrument,
+      ...optionalArgs([
+        ['--downbeat-phase', opts.downbeatPhase],
+        ['--beats-per-bar', opts.beatsPerBar]
+      ])
+    ],
+    'Rebuilding bars…'
+  )
+}
+
+export async function importGuitarTabMidi(videoId: string, opts: TabMidiImportOptions): Promise<GuitarTabData> {
+  const instrument = opts.instrument
+  if (!existsSync(opts.midiPath)) throw new Error('MIDI file not found.')
+  const stem = join(stemsDir(videoId), `${instrument}.wav`)
+  const mix = mixWavPath(videoId)
+  return runTabEngine(
+    videoId,
+    instrument,
+    [
+      '--from-midi',
+      opts.midiPath,
+      '--midi-track',
+      String(opts.track),
+      '--out',
+      tabPath(videoId, instrument),
+      '--instrument',
+      instrument,
+      ...(existsSync(stem) ? ['--input', stem] : existsSync(mix) ? ['--input', mix] : []),
+      ...optionalArgs([
+        ['--midi-offset', opts.offset ?? 0],
+        ['--transpose', opts.transpose ?? 0],
+        ['--tuning', opts.tuning],
+        ['--position', opts.position],
+        ['--downbeat-phase', opts.downbeatPhase]
+      ])
+    ],
+    'Importing MIDI…'
+  )
+}
+
+export async function listMidiTracks(midiPath: string): Promise<MidiFileInfo> {
+  if (!(await ensureTabEngineDeps())) {
+    throw new Error('The tablature engine could not be installed. Check your connection and try again.')
+  }
+  const out = await new Promise<string>((resolve, reject) => {
+    const child = spawn(venvPython(), [tabScript(), '--list-midi-tracks', midiPath], { env: { ...process.env } })
+    let stdout = ''
+    let stderr = ''
+    child.stdout?.on('data', (c: Buffer) => {
+      stdout += c.toString()
+    })
+    child.stderr?.on('data', (c: Buffer) => {
+      stderr = (stderr + c.toString()).slice(-800)
+    })
+    child.on('error', reject)
+    child.on('close', (code) => (code === 0 ? resolve(stdout) : reject(new Error(stderr.trim() || `exit ${code}`))))
+  })
+  for (const line of out.split('\n')) {
+    try {
+      const parsed = JSON.parse(line)
+      if (parsed.type === 'tracks') {
+        return {
+          path: midiPath,
+          duration: Number(parsed.duration ?? 0),
+          bpm: Number(parsed.bpm ?? 120),
+          tracks: Array.isArray(parsed.tracks) ? parsed.tracks : []
+        }
+      }
+      if (parsed.type === 'error') throw new Error(String(parsed.message))
+    } catch (err) {
+      if (err instanceof Error && !(err instanceof SyntaxError)) throw err
+    }
+  }
+  throw new Error('Could not read the MIDI file.')
+}

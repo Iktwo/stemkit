@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { MODEL_EXTENDED, type AppSettings, type Song, type StemId } from '../../../shared/types'
+import { MODEL_EXTENDED, type AppSettings, type Song, type StemId, type SynthLaneId, type TabInstrument } from '../../../shared/types'
 import { usePlayer, clearBufferCache } from '../lib/PlayerContext'
 import { buildStemMeta, STEM_INFO, PREFERRED_ORDER } from '../lib/stems'
+import { audioBufferToWav } from '../lib/midiSynth'
 import { fmtTime } from '../lib/format'
 import { Thumb } from '../lib/thumbs'
 import { StemLane } from './StemLane'
@@ -40,7 +41,12 @@ export function Player({ song, settings, onReprocess }: Props): React.ReactEleme
     toggleStemSolo,
     setMasterVolume,
     applyPreset,
-    stopAndClose
+    stopAndClose,
+    rate,
+    setRate,
+    loop,
+    setLoop,
+    removeSynthLane
   } = usePlayer()
 
   // Reprocess modal state
@@ -90,12 +96,19 @@ export function Player({ song, settings, onReprocess }: Props): React.ReactEleme
   const exportStem = useCallback(
     async (id: StemId): Promise<void> => {
       try {
+        if (id === 'guitar-synth' || id === 'bass-synth') {
+          const buf = buffers[id]
+          if (!buf) return
+          const instrument: TabInstrument = id === 'bass-synth' ? 'bass' : 'guitar'
+          await window.stemkit.exportSynthLane(song.videoId, instrument, audioBufferToWav(buf))
+          return
+        }
         await window.stemkit.exportStem(song.videoId, id)
       } catch (err) {
         alert(err instanceof Error ? err.message : String(err))
       }
     },
-    [song.videoId]
+    [song.videoId, buffers]
   )
 
   const exportAllStems = useCallback(async (): Promise<void> => {
@@ -242,6 +255,10 @@ export function Player({ song, settings, onReprocess }: Props): React.ReactEleme
             onPreset={applyPreset}
             master={master}
             onMaster={setMasterVolume}
+            rate={rate}
+            onRate={setRate}
+            loop={loop}
+            onLoop={setLoop}
           />
 
           <div className="mt-4 space-y-2">
@@ -274,6 +291,7 @@ export function Player({ song, settings, onReprocess }: Props): React.ReactEleme
                     ? () => openTabs(meta.id as 'guitar' | 'bass')
                     : undefined
                 }
+                onRemove={meta.synth ? () => removeSynthLane(meta.id as SynthLaneId) : undefined}
                 playing={playing}
               />
             ))}

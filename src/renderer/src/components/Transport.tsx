@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { fmtTime } from '../lib/format'
 import { PlayIcon, PauseIcon } from './Icons'
+import { PracticeControls } from './PracticeControls'
 
-import type { PresetId } from '../lib/PlayerContext'
+import type { PresetId, LoopRegion } from '../lib/PlayerContext'
 
 export type { PresetId }
 
@@ -24,18 +25,24 @@ interface Props {
   onPreset: (p: PresetId) => void
   master: number
   onMaster: (v: number) => void
+  rate: number
+  onRate: (r: number) => void
+  loop: LoopRegion | null
+  onLoop: (l: LoopRegion | null) => void
 }
 
 function SeekBar({
   duration,
   getPosition,
   onSeek,
-  playing
+  playing,
+  loop
 }: {
   duration: number
   getPosition: () => number
   onSeek: (seconds: number) => void
   playing: boolean
+  loop?: LoopRegion | null
 }): React.ReactElement {
   const barRef = useRef<HTMLDivElement>(null)
   const [, force] = useState(0)
@@ -76,7 +83,16 @@ function SeekBar({
         }}
         className="no-drag relative flex-1 h-4 flex items-center cursor-pointer group"
       >
-        <div className="w-full h-1 rounded-full bg-white/10 overflow-hidden">
+        <div className="w-full h-1 rounded-full bg-white/10 overflow-hidden relative">
+          {loop && duration > 0 && (
+            <div
+              className="absolute inset-y-0 bg-amber-300/40"
+              style={{
+                left: `${(loop.start / duration) * 100}%`,
+                width: `${((loop.end - loop.start) / duration) * 100}%`
+              }}
+            />
+          )}
           <div
             className="h-full rounded-full bg-gradient-to-r from-olive-400 to-emerald-400"
             style={{ width: `${frac * 100}%` }}
@@ -103,11 +119,15 @@ export function Transport({
   preset,
   onPreset,
   master,
-  onMaster
+  onMaster,
+  rate,
+  onRate,
+  loop,
+  onLoop
 }: Props): React.ReactElement {
   return (
     <div className="glass rounded-2xl px-5 py-4 mt-4 flex flex-col gap-4">
-      <SeekBar duration={duration} getPosition={getPosition} onSeek={onSeek} playing={playing} />
+      <SeekBar duration={duration} getPosition={getPosition} onSeek={onSeek} playing={playing} loop={loop} />
 
       <div className="flex items-center justify-between">
         <button
@@ -156,6 +176,18 @@ export function Transport({
             }}
           />
         </div>
+      </div>
+
+      <div className="flex items-center justify-between gap-3 flex-wrap border-t border-white/[0.06] pt-3">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-white/30">Practice</span>
+        <PracticeControls
+          rate={rate}
+          onRate={onRate}
+          loop={loop}
+          onLoop={onLoop}
+          getPosition={getPosition}
+          duration={duration}
+        />
       </div>
     </div>
   )

@@ -1,4 +1,14 @@
-export type StemId = 'vocals' | 'drums' | 'bass' | 'other' | 'piano' | 'guitar'
+export type StemId = 'vocals' | 'drums' | 'bass' | 'other' | 'piano' | 'guitar' | SynthLaneId
+
+// virtual lanes rendered in the renderer from a tab's MIDI notes; they sit in
+// the mixer next to the real stems but never exist on disk
+export type SynthLaneId = 'guitar-synth' | 'bass-synth'
+export const SYNTH_LANE_FOR: Record<TabInstrument, SynthLaneId> = {
+  guitar: 'guitar-synth',
+  bass: 'bass-synth'
+}
+
+export type TabInstrument = 'guitar' | 'bass'
 
 export const DEFAULT_STEMS: string[] = ['vocals', 'drums', 'bass', 'guitar', 'piano', 'other']
 
@@ -127,7 +137,17 @@ export interface TabNote {
   end: number
   amplitude: number
   chord?: string
+  articulation?: 'hammer' | 'pull' | 'slide'
 }
+
+export interface TabChord {
+  start: number
+  end: number
+  name: string
+}
+
+export type TabMode = 'lead' | 'poly' | 'chord' | 'note'
+export type TabVoicing = 'standard' | 'barre' | 'power'
 
 export interface TabMeasure {
   number: number
@@ -138,18 +158,30 @@ export interface TabMeasure {
 }
 
 export interface GuitarTabData {
-  instrument?: 'guitar' | 'bass'
+  instrument?: TabInstrument
+  // human readable description of what produced the notes
+  engine?: string
   model?: string
+  source?: 'audio' | 'midi'
   bpm: number
-  mode?: 'chord' | 'note'
+  mode?: TabMode
   voicingStyle?: string
   tuning: string[]
+  tuningId?: string
   tuningPitches?: number[]
   positionAnchor?: string
   sensitivity?: string
   duration: number
+  beatsPerBar?: number
+  beats?: number[]
+  downbeatPhase?: number
+  chords?: TabChord[]
   notesCount: number
   midiPath?: string
+  midiFile?: string
+  midiTrack?: string
+  midiOffset?: number
+  transpose?: number
   notes: TabNote[]
   measures: TabMeasure[]
   asciiTab: string
@@ -157,9 +189,56 @@ export interface GuitarTabData {
 
 export interface TabProgress {
   videoId: string
-  instrument?: 'guitar' | 'bass'
+  instrument?: TabInstrument
   pct: number
   message?: string
+}
+
+export interface TabTranscribeOptions {
+  instrument: TabInstrument
+  mode?: TabMode
+  voicing?: TabVoicing
+  tuning?: string
+  position?: string
+  sensitivity?: string
+  beatsPerBar?: number
+  downbeatPhase?: number
+}
+
+export interface TabRebuildOptions {
+  downbeatPhase?: number
+  beatsPerBar?: number
+}
+
+export interface TabMidiImportOptions {
+  instrument: TabInstrument
+  midiPath: string
+  track: number | 'all'
+  offset?: number
+  transpose?: number
+  tuning?: string
+  position?: string
+  downbeatPhase?: number
+}
+
+export interface MidiTrackInfo {
+  index: number
+  name: string
+  program: number
+  programName: string
+  isDrum: boolean
+  noteCount: number
+  pitchLow: string
+  pitchHigh: string
+  start: number
+  end: number
+}
+
+export interface MidiFileInfo {
+  path: string
+  duration: number
+  bpm: number
+  tracks: MidiTrackInfo[]
 }
 
 export interface StemKitApi {
@@ -185,20 +264,15 @@ export interface StemKitApi {
   getLyrics(videoId: string): Promise<KaraokeData | null>
   transcribeLyrics(videoId: string, model?: string): Promise<KaraokeData>
   saveLyrics(videoId: string, data: KaraokeData): Promise<boolean>
-  getTabs(videoId: string, instrument?: 'guitar' | 'bass'): Promise<GuitarTabData | null>
-  transcribeTabs(
-    videoId: string,
-    tuning?: string,
-    position?: string,
-    sensitivity?: string,
-    mode?: 'chord' | 'note',
-    voicing?: string,
-    force?: boolean,
-    instrument?: 'guitar' | 'bass'
-  ): Promise<GuitarTabData>
-  saveTabs(videoId: string, data: GuitarTabData, instrument?: 'guitar' | 'bass'): Promise<boolean>
-  exportTabMidi(videoId: string, instrument?: 'guitar' | 'bass'): Promise<{ saved: boolean; path?: string }>
-  exportTabAscii(videoId: string, instrument?: 'guitar' | 'bass'): Promise<{ saved: boolean; path?: string }>
+  getTabs(videoId: string, instrument?: TabInstrument): Promise<GuitarTabData | null>
+  transcribeTabs(videoId: string, opts: TabTranscribeOptions): Promise<GuitarTabData>
+  rebuildTabs(videoId: string, instrument: TabInstrument, opts: TabRebuildOptions): Promise<GuitarTabData>
+  pickMidiFile(): Promise<MidiFileInfo | null>
+  importTabMidi(videoId: string, opts: TabMidiImportOptions): Promise<GuitarTabData>
+  saveTabs(videoId: string, data: GuitarTabData, instrument?: TabInstrument): Promise<boolean>
+  exportTabMidi(videoId: string, instrument?: TabInstrument): Promise<{ saved: boolean; path?: string }>
+  exportTabAscii(videoId: string, instrument?: TabInstrument): Promise<{ saved: boolean; path?: string }>
+  exportSynthLane(videoId: string, instrument: TabInstrument, wav: Uint8Array): Promise<{ saved: boolean; path?: string }>
   onUpdateEvent(cb: (ev: UpdateEvent) => void): () => void
   onJobEvent(cb: (ev: JobEvent) => void): () => void
   onEnvEvent(cb: (ev: EnvEvent) => void): () => void

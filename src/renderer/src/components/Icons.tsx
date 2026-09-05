@@ -249,3 +249,68 @@ export function MusicNoteIcon({ className = base }: IconProps) {
   )
 }
 
+
+export function ImportIcon({ className = base }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M12 3v12M7 10l5 5 5-5" />
+      <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+    </svg>
+  )
+}
+
+export function LoopIcon({ className = base }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M17 2l4 4-4 4" />
+      <path d="M3 11V9a4 4 0 0 1 4-4h14" />
+      <path d="M7 22l-4-4 4-4" />
+      <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+    </svg>
+  )
+}
+
+export function SpeedIcon({ className = base }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M4 15a8 8 0 1 1 16 0" />
+      <path d="M12 15l4-5" />
+      <circle cx="12" cy="15" r="1.5" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
+export function StopIcon({ className = base }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className={className}>
+      <rect x="6" y="6" width="12" height="12" rx="2" />
+    </svg>
+  )
+}
+
+export function ChevronLeftIcon({ className = base }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="m15 6-6 6 6 6" />
+    </svg>
+  )
+}
+
+export function ChevronRightIcon({ className = base }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="m9 6 6 6-6 6" />
+    </svg>
+  )
+}
+
+export function MixerIcon({ className = base }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M6 4v16M12 4v16M18 4v16" />
+      <circle cx="6" cy="9" r="2" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="15" r="2" fill="currentColor" stroke="none" />
+      <circle cx="18" cy="7" r="2" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}

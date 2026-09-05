@@ -16,56 +16,30 @@ export interface SynthInstrumentOption {
 }
 
 export const SYNTH_INSTRUMENTS: SynthInstrumentOption[] = [
-  {
-    id: 'acoustic',
-    name: 'Acoustic Steel Pluck',
-    desc: 'Crisp pick attack with warm wooden resonance & natural string decay'
-  },
-  {
-    id: 'electric',
-    name: 'Electric Clean',
-    desc: 'Warm jazz & single-coil clean tone with smooth harmonic sustain'
-  },
-  {
-    id: 'nylon',
-    name: 'Classical Nylon',
-    desc: 'Mellow round fingerstyle attack with organic wooden body'
-  },
-  {
-    id: 'synth',
-    name: 'Chiptune / Lead',
-    desc: 'Crisp retro synth lead for precision melody & rhythm practice'
-  },
-  {
-    id: 'bass_electric',
-    name: 'Electric Bass (P-Bass)',
-    desc: 'Punchy fingerstyle electric bass with deep low-end fundamental'
-  },
-  {
-    id: 'bass_synth',
-    name: 'Synth Bass (Moog Sub)',
-    desc: 'Heavy analog sub-bass with rich harmonic punch'
-  }
+  { id: 'acoustic', name: 'Acoustic steel', desc: 'Pick attack, wooden body, natural string decay' },
+  { id: 'electric', name: 'Electric clean', desc: 'Warm single-coil clean tone' },
+  { id: 'nylon', name: 'Classical nylon', desc: 'Round fingerstyle attack' },
+  { id: 'synth', name: 'Chiptune lead', desc: 'Square-wave lead for rhythm practice' },
+  { id: 'bass_electric', name: 'Electric bass', desc: 'Fingerstyle P-bass with deep fundamental' },
+  { id: 'bass_synth', name: 'Synth bass', desc: 'Analog sub with a resonant filter' }
 ]
 
 export function midiToFreq(pitch: number): number {
   return 440 * Math.pow(2, (pitch - 69) / 12)
 }
 
-// Noise buffer cache for realistic pick transient
-let noiseBuffer: AudioBuffer | null = null
-function getNoiseBuffer(ctx: AudioContext): AudioBuffer {
-  if (noiseBuffer && noiseBuffer.sampleRate === ctx.sampleRate) {
-    return noiseBuffer
-  }
-  const length = Math.floor(ctx.sampleRate * 0.04) // 40ms noise
+// Noise buffer cache (per context) for the pick / finger transient
+const noiseBuffers = new WeakMap<BaseAudioContext, AudioBuffer>()
+function getNoiseBuffer(ctx: BaseAudioContext): AudioBuffer {
+  const cached = noiseBuffers.get(ctx)
+  if (cached) return cached
+  const length = Math.floor(ctx.sampleRate * 0.04)
   const buf = ctx.createBuffer(1, length, ctx.sampleRate)
   const data = buf.getChannelData(0)
   for (let i = 0; i < length; i++) {
-    // Pink-ish weighted white noise
     data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ctx.sampleRate * 0.008))
   }
-  noiseBuffer = buf
+  noiseBuffers.set(ctx, buf)
   return buf
 }
 
@@ -74,10 +48,141 @@ interface ActiveVoice {
   time: number
 }
 
+interface Voice {
+  sources: AudioScheduledSourceNode[]
+  gain: GainNode
+  stopTime: number
+}
+
+/**
+ * Builds one plucked / synth voice into `destination`. Works on both a live
+ * AudioContext (play-along) and an OfflineAudioContext (rendering a whole
+ * tab into a mixer lane).
+ */
+function buildVoice(
+  ctx: BaseAudioContext,
+  destination: AudioNode,
+  pitch: number,
+  startTime: number,
+  duration: number,
+  velocity: number,
+  instrument: SynthInstrument
+): Voice | null {
+  const freq = midiToFreq(pitch)
+  if (!(freq > 0)) return null
+
+  const voiceGain = ctx.createGain()
+  voiceGain.connect(destination)
+
+  // lower notes ring longer
+  const naturalDecay = Math.max(0.8, 3.2 - (pitch - 40) * 0.04)
+  const activeDuration = Math.min(duration * 1.5, naturalDecay)
+  const sources: AudioScheduledSourceNode[] = []
+
+  const transient = (cutoff: number, q: number, amount: number, decay: number): void => {
+    const noise = ctx.createBufferSource()
+    noise.buffer = getNoiseBuffer(ctx)
+    const filter = ctx.createBiquadFilter()
+    filter.type = 'bandpass'
+    filter.frequency.setValueAtTime(cutoff, startTime)
+    filter.Q.setValueAtTime(q, startTime)
+    const gain = ctx.createGain()
+    gain.gain.setValueAtTime(velocity * amount, startTime)
+    gain.gain.exponentialRampToValueAtTime(0.0001, startTime + decay)
+    noise.connect(filter)
+    filter.connect(gain)
+    gain.connect(voiceGain)
+    noise.start(startTime)
+    sources.push(noise)
+  }
+
+  const osc = (type: OscillatorType, detune = 0, gainValue = 1, target: AudioNode): void => {
+    const o = ctx.createOscillator()
+    o.type = type
+    o.frequency.setValueAtTime(freq, startTime)
+    if (detune) o.detune.setValueAtTime(detune, startTime)
+    if (gainValue !== 1) {
+      const g = ctx.createGain()
+      g.gain.setValueAtTime(gainValue, startTime)
+      o.connect(g)
+      g.connect(target)
+    } else {
+      o.connect(target)
+    }
+    o.start(startTime)
+    sources.push(o)
+  }
+
+  const lowpass = (startCutoff: number, endCutoff: number, q: number, sweep: number): BiquadFilterNode => {
+    const f = ctx.createBiquadFilter()
+    f.type = 'lowpass'
+    f.Q.setValueAtTime(q, startTime)
+    f.frequency.setValueAtTime(startCutoff, startTime)
+    if (endCutoff !== startCutoff) f.frequency.exponentialRampToValueAtTime(endCutoff, startTime + sweep)
+    return f
+  }
+
+  if (instrument === 'acoustic') {
+    transient(Math.min(3800, freq * 4), 3.0, 0.28, 0.025)
+    const filter = lowpass(Math.min(10000, Math.max(1200, freq * 7)), Math.max(350, freq * 1.4), 3.5, 0.18)
+    const body = ctx.createBiquadFilter()
+    body.type = 'peaking'
+    body.frequency.setValueAtTime(240, startTime)
+    body.Q.setValueAtTime(1.8, startTime)
+    body.gain.setValueAtTime(3.2, startTime)
+    osc('triangle', 0, 1, filter)
+    osc('sawtooth', 1.8, 0.35, filter)
+    filter.connect(body)
+    body.connect(voiceGain)
+  } else if (instrument === 'electric') {
+    const filter = lowpass(Math.min(3800, freq * 3.5), Math.min(3800, freq * 3.5), 2.0, 0)
+    osc('sine', 0, 1, filter)
+    osc('triangle', -2.2, 0.4, filter)
+    filter.connect(voiceGain)
+  } else if (instrument === 'nylon') {
+    const filter = lowpass(Math.min(2200, freq * 2.5), Math.min(2200, freq * 2.5), 1.2, 0)
+    osc('triangle', 0, 1, filter)
+    filter.connect(voiceGain)
+  } else if (instrument === 'bass_electric') {
+    transient(Math.min(1600, freq * 5), 2.0, 0.2, 0.02)
+    const filter = lowpass(Math.min(2400, Math.max(700, freq * 6)), Math.max(250, freq * 2.2), 2.5, 0.12)
+    const sub = ctx.createBiquadFilter()
+    sub.type = 'peaking'
+    sub.frequency.setValueAtTime(85, startTime)
+    sub.Q.setValueAtTime(1.4, startTime)
+    sub.gain.setValueAtTime(4.0, startTime)
+    osc('sine', 0, 1, filter)
+    osc('triangle', 0, 0.45, filter)
+    filter.connect(sub)
+    sub.connect(voiceGain)
+  } else if (instrument === 'bass_synth') {
+    const filter = lowpass(Math.min(1800, freq * 8), Math.max(160, freq * 1.5), 5.0, 0.15)
+    osc('sawtooth', 0, 1, filter)
+    osc('square', -3.0, 0.5, filter)
+    filter.connect(voiceGain)
+  } else {
+    const filter = lowpass(Math.min(5000, freq * 4), Math.min(5000, freq * 4), 1, 0)
+    osc('square', 0, 1, filter)
+    filter.connect(voiceGain)
+  }
+
+  const baseAmp = velocity * 0.35
+  voiceGain.gain.setValueAtTime(0.0001, startTime)
+  voiceGain.gain.linearRampToValueAtTime(baseAmp, startTime + 0.0025)
+  const stopTime = startTime + activeDuration
+  voiceGain.gain.exponentialRampToValueAtTime(0.0005, stopTime)
+  for (const s of sources) {
+    try {
+      s.stop(stopTime + 0.05)
+    } catch {}
+  }
+  return { sources, gain: voiceGain, stopTime }
+}
+
 export class MidiTabSynth {
   private masterGain: GainNode | null = null
   private activeVoices: Set<ActiveVoice> = new Set()
-  private scheduledNotes = new Set<string>() // note signature -> scheduled
+  private scheduledNotes = new Set<string>()
   private lastScheduledPos = -1
   private sortedNotes: TabNote[] = []
 
@@ -128,66 +233,43 @@ export class MidiTabSynth {
     this.activeVoices.clear()
   }
 
-  /**
-   * Schedules notes within a lookahead window during synchronized song playback.
-   */
+  /** Schedules notes within a lookahead window during synchronized song playback. */
   public updatePlayback(songPos: number, isPlaying: boolean, rate = 1): void {
     if (!this.enabled || !isPlaying || this.sortedNotes.length === 0) {
-      if (!isPlaying && this.activeVoices.size > 0) {
-        this.stopAllVoices()
-      }
+      if (!isPlaying && this.activeVoices.size > 0) this.stopAllVoices()
       return
     }
-
     const ctx = engine.ensureCtx()
-    if (ctx.state === 'suspended') {
-      void ctx.resume()
-    }
+    if (ctx.state === 'suspended') void ctx.resume()
 
-    // If playback jumped backwards or forwards by more than 0.3s, reset scheduler
     if (this.lastScheduledPos < 0 || Math.abs(songPos - this.lastScheduledPos) > 0.4) {
       this.reset(songPos)
     }
 
-    const LOOKAHEAD = 0.18 // 180ms lookahead
+    const LOOKAHEAD = 0.18
     const windowStart = Math.max(0, this.lastScheduledPos)
     const windowEnd = songPos + LOOKAHEAD
 
-    // Find notes in the window
     for (const note of this.sortedNotes) {
       if (note.start > windowEnd) break
       if (note.start < windowStart - 0.02) continue
-
-      const noteKey = `${note.pitch}_${note.start.toFixed(3)}_${note.string}`
-      if (this.scheduledNotes.has(noteKey)) continue
-
-      this.scheduledNotes.add(noteKey)
-
-      // Time relative to now in AudioContext seconds
+      const key = `${note.pitch}_${note.start.toFixed(3)}_${note.string}`
+      if (this.scheduledNotes.has(key)) continue
+      this.scheduledNotes.add(key)
       const deltaSec = (note.start - songPos) / rate
-      const targetCtxTime = Math.max(ctx.currentTime, ctx.currentTime + deltaSec)
-      const noteDuration = Math.max(0.12, (note.end - note.start) / rate)
+      const when = Math.max(ctx.currentTime, ctx.currentTime + deltaSec)
+      const dur = Math.max(0.12, (note.end - note.start) / rate)
       const velocity = Math.min(1.2, Math.max(0.3, note.amplitude || 0.8))
-
-      this.triggerVoice(ctx, note.pitch, targetCtxTime, noteDuration, velocity, this.instrument)
+      this.triggerVoice(ctx, note.pitch, when, dur, velocity, this.instrument)
     }
-
     this.lastScheduledPos = windowEnd
-
-    // Housekeep scheduledNotes set to prevent memory growth
-    if (this.scheduledNotes.size > 1500) {
-      this.scheduledNotes.clear()
-    }
+    if (this.scheduledNotes.size > 1500) this.scheduledNotes.clear()
   }
 
-  /**
-   * Immediately audition a note (e.g. clicking a tab note or fret).
-   */
+  /** Immediately audition a note (clicking a tab note or a fret). */
   public auditionNote(pitch: number, duration = 0.7, velocity = 0.85): void {
     const ctx = engine.ensureCtx()
-    if (ctx.state === 'suspended') {
-      void ctx.resume()
-    }
+    if (ctx.state === 'suspended') void ctx.resume()
     this.triggerVoice(ctx, pitch, ctx.currentTime, duration, velocity, this.instrument)
   }
 
@@ -199,284 +281,110 @@ export class MidiTabSynth {
     velocity: number,
     instrument: SynthInstrument
   ): void {
-    const master = this.ensureMaster(ctx)
-    const freq = midiToFreq(pitch)
-    if (freq <= 0 || isNaN(freq)) return
-
-    const voiceGain = ctx.createGain()
-    voiceGain.connect(master)
-
-    // Voice envelope configuration based on pitch
-    // Lower strings ring longer, high strings ring shorter
-    const naturalDecay = Math.max(0.8, 3.2 - (pitch - 40) * 0.04)
-    const activeDuration = Math.min(duration * 1.5, naturalDecay)
-
-    const oscillators: OscillatorNode[] = []
-    let noiseSource: AudioBufferSourceNode | null = null
-
-    if (instrument === 'acoustic') {
-      // Acoustic Guitar Pluck:
-      // 1. Transient pick click (filtered noise burst)
-      const noise = ctx.createBufferSource()
-      noise.buffer = getNoiseBuffer(ctx)
-      const noiseFilter = ctx.createBiquadFilter()
-      noiseFilter.type = 'bandpass'
-      noiseFilter.frequency.setValueAtTime(Math.min(3800, freq * 4), startTime)
-      noiseFilter.Q.setValueAtTime(3.0, startTime)
-
-      const noiseGain = ctx.createGain()
-      noiseGain.gain.setValueAtTime(velocity * 0.28, startTime)
-      noiseGain.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.025)
-
-      noise.connect(noiseFilter)
-      noiseFilter.connect(noiseGain)
-      noiseGain.connect(voiceGain)
-      noise.start(startTime)
-      noiseSource = noise
-
-      // 2. Harmonic body: Triangle (fundamental) + Sawtooth (rich overtones)
-      const osc1 = ctx.createOscillator()
-      osc1.type = 'triangle'
-      osc1.frequency.setValueAtTime(freq, startTime)
-
-      const osc2 = ctx.createOscillator()
-      osc2.type = 'sawtooth'
-      osc2.frequency.setValueAtTime(freq, startTime)
-      osc2.detune.setValueAtTime(1.8, startTime) // slight natural string chorus
-
-      const osc2Gain = ctx.createGain()
-      osc2Gain.gain.setValueAtTime(0.35, startTime)
-
-      // 3. Dynamic Low-Pass Filter: Bright at attack, fast damping of high overtones
-      const filter = ctx.createBiquadFilter()
-      filter.type = 'lowpass'
-      filter.Q.setValueAtTime(3.5, startTime)
-      const startCutoff = Math.min(10000, Math.max(1200, freq * 7))
-      const endCutoff = Math.max(350, freq * 1.4)
-      filter.frequency.setValueAtTime(startCutoff, startTime)
-      filter.frequency.exponentialRampToValueAtTime(endCutoff, startTime + 0.18)
-
-      // 4. Acoustic Body Cavity Resonator (240Hz wooden box bump)
-      const bodyFilter = ctx.createBiquadFilter()
-      bodyFilter.type = 'peaking'
-      bodyFilter.frequency.setValueAtTime(240, startTime)
-      bodyFilter.Q.setValueAtTime(1.8, startTime)
-      bodyFilter.gain.setValueAtTime(3.2, startTime)
-
-      osc1.connect(filter)
-      osc2.connect(osc2Gain)
-      osc2Gain.connect(filter)
-      filter.connect(bodyFilter)
-      bodyFilter.connect(voiceGain)
-
-      osc1.start(startTime)
-      osc2.start(startTime)
-      oscillators.push(osc1, osc2)
-    } else if (instrument === 'electric') {
-      // Clean Electric Tone:
-      const osc1 = ctx.createOscillator()
-      osc1.type = 'sine'
-      osc1.frequency.setValueAtTime(freq, startTime)
-
-      const osc2 = ctx.createOscillator()
-      osc2.type = 'triangle'
-      osc2.frequency.setValueAtTime(freq, startTime)
-      osc2.detune.setValueAtTime(-2.2, startTime)
-
-      const osc2Gain = ctx.createGain()
-      osc2Gain.gain.setValueAtTime(0.4, startTime)
-
-      const filter = ctx.createBiquadFilter()
-      filter.type = 'lowpass'
-      filter.frequency.setValueAtTime(Math.min(3800, freq * 3.5), startTime)
-      filter.Q.setValueAtTime(2.0, startTime)
-
-      osc1.connect(filter)
-      osc2.connect(osc2Gain)
-      osc2Gain.connect(filter)
-      filter.connect(voiceGain)
-
-      osc1.start(startTime)
-      osc2.start(startTime)
-      oscillators.push(osc1, osc2)
-    } else if (instrument === 'nylon') {
-      // Classical Nylon Tone:
-      const osc = ctx.createOscillator()
-      osc.type = 'triangle'
-      osc.frequency.setValueAtTime(freq, startTime)
-
-      const filter = ctx.createBiquadFilter()
-      filter.type = 'lowpass'
-      filter.frequency.setValueAtTime(Math.min(2200, freq * 2.5), startTime)
-      filter.Q.setValueAtTime(1.2, startTime)
-
-      osc.connect(filter)
-      filter.connect(voiceGain)
-      osc.start(startTime)
-      oscillators.push(osc)
-    } else if (instrument === 'bass_electric') {
-      // Electric Bass (P-Bass style finger pluck):
-      // 1. Soft finger transient
-      const noise = ctx.createBufferSource()
-      noise.buffer = getNoiseBuffer(ctx)
-      const noiseFilter = ctx.createBiquadFilter()
-      noiseFilter.type = 'bandpass'
-      noiseFilter.frequency.setValueAtTime(Math.min(1600, freq * 5), startTime)
-      noiseFilter.Q.setValueAtTime(2.0, startTime)
-
-      const noiseGain = ctx.createGain()
-      noiseGain.gain.setValueAtTime(velocity * 0.2, startTime)
-      noiseGain.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.02)
-
-      noise.connect(noiseFilter)
-      noiseFilter.connect(noiseGain)
-      noiseGain.connect(voiceGain)
-      noise.start(startTime)
-      noiseSource = noise
-
-      // 2. Fundamental sine + warm triangle overtone
-      const osc1 = ctx.createOscillator()
-      osc1.type = 'sine'
-      osc1.frequency.setValueAtTime(freq, startTime)
-
-      const osc2 = ctx.createOscillator()
-      osc2.type = 'triangle'
-      osc2.frequency.setValueAtTime(freq, startTime)
-
-      const osc2Gain = ctx.createGain()
-      osc2Gain.gain.setValueAtTime(0.45, startTime)
-
-      // 3. Lowpass filter with punchy attack
-      const filter = ctx.createBiquadFilter()
-      filter.type = 'lowpass'
-      filter.Q.setValueAtTime(2.5, startTime)
-      const startCutoff = Math.min(2400, Math.max(700, freq * 6))
-      const endCutoff = Math.max(250, freq * 2.2)
-      filter.frequency.setValueAtTime(startCutoff, startTime)
-      filter.frequency.exponentialRampToValueAtTime(endCutoff, startTime + 0.12)
-
-      // 4. Sub-bass / punch resonance boost at 85Hz
-      const subBoost = ctx.createBiquadFilter()
-      subBoost.type = 'peaking'
-      subBoost.frequency.setValueAtTime(85, startTime)
-      subBoost.Q.setValueAtTime(1.4, startTime)
-      subBoost.gain.setValueAtTime(4.0, startTime)
-
-      osc1.connect(filter)
-      osc2.connect(osc2Gain)
-      osc2Gain.connect(filter)
-      filter.connect(subBoost)
-      subBoost.connect(voiceGain)
-
-      osc1.start(startTime)
-      osc2.start(startTime)
-      oscillators.push(osc1, osc2)
-    } else if (instrument === 'bass_synth') {
-      // Synth Bass (Analog Moog-style sub):
-      const osc1 = ctx.createOscillator()
-      osc1.type = 'sawtooth'
-      osc1.frequency.setValueAtTime(freq, startTime)
-
-      const osc2 = ctx.createOscillator()
-      osc2.type = 'square'
-      osc2.frequency.setValueAtTime(freq, startTime)
-      osc2.detune.setValueAtTime(-3.0, startTime)
-
-      const osc2Gain = ctx.createGain()
-      osc2Gain.gain.setValueAtTime(0.5, startTime)
-
-      const filter = ctx.createBiquadFilter()
-      filter.type = 'lowpass'
-      filter.Q.setValueAtTime(5.0, startTime)
-      filter.frequency.setValueAtTime(Math.min(1800, freq * 8), startTime)
-      filter.frequency.exponentialRampToValueAtTime(Math.max(160, freq * 1.5), startTime + 0.15)
-
-      osc1.connect(filter)
-      osc2.connect(osc2Gain)
-      osc2Gain.connect(filter)
-      filter.connect(voiceGain)
-
-      osc1.start(startTime)
-      osc2.start(startTime)
-      oscillators.push(osc1, osc2)
-    } else {
-      // Chiptune / Synth:
-      const osc = ctx.createOscillator()
-      osc.type = 'square'
-      osc.frequency.setValueAtTime(freq, startTime)
-
-      const filter = ctx.createBiquadFilter()
-      filter.type = 'lowpass'
-      filter.frequency.setValueAtTime(Math.min(5000, freq * 4), startTime)
-
-      osc.connect(filter)
-      filter.connect(voiceGain)
-      osc.start(startTime)
-      oscillators.push(osc)
+    const voice = buildVoice(ctx, this.ensureMaster(ctx), pitch, startTime, duration, velocity, instrument)
+    if (!voice) return
+    const teardown = (): void => {
+      for (const s of voice.sources) {
+        try {
+          s.stop()
+        } catch {}
+        try {
+          s.disconnect()
+        } catch {}
+      }
+      try {
+        voice.gain.disconnect()
+      } catch {}
     }
-
-    // Main Amplitude Envelope
-    const baseAmp = velocity * 0.35
-    voiceGain.gain.setValueAtTime(0.0001, startTime)
-    // Quick 2.5ms attack to avoid audio pop
-    voiceGain.gain.linearRampToValueAtTime(baseAmp, startTime + 0.0025)
-
-    // Exponential decay down to quiet ring
-    const stopTime = startTime + activeDuration
-    voiceGain.gain.exponentialRampToValueAtTime(0.0005, stopTime)
-
-    // Schedule stop
-    const voiceRecord: ActiveVoice = {
+    const record: ActiveVoice = {
       time: startTime,
       stop: (when: number) => {
         try {
-          voiceGain.gain.cancelScheduledValues(when)
-          voiceGain.gain.setValueAtTime(voiceGain.gain.value, when)
-          voiceGain.gain.linearRampToValueAtTime(0.0001, when + 0.03)
-          setTimeout(() => {
-            for (const o of oscillators) {
-              try {
-                o.stop()
-                o.disconnect()
-              } catch {}
-            }
-            if (noiseSource) {
-              try {
-                noiseSource.stop()
-                noiseSource.disconnect()
-              } catch {}
-            }
-            voiceGain.disconnect()
-          }, 45)
+          voice.gain.gain.cancelScheduledValues(when)
+          voice.gain.gain.setValueAtTime(voice.gain.gain.value, when)
+          voice.gain.gain.linearRampToValueAtTime(0.0001, when + 0.03)
         } catch {}
+        setTimeout(teardown, 45)
       }
     }
-
-    this.activeVoices.add(voiceRecord)
-
-    // Auto-cleanup on finish
+    this.activeVoices.add(record)
     setTimeout(
       () => {
-        this.activeVoices.delete(voiceRecord)
-        for (const o of oscillators) {
-          try {
-            o.stop()
-            o.disconnect()
-          } catch {}
-        }
-        if (noiseSource) {
-          try {
-            noiseSource.stop()
-            noiseSource.disconnect()
-          } catch {}
-        }
-        try {
-          voiceGain.disconnect()
-        } catch {}
+        this.activeVoices.delete(record)
+        teardown()
       },
-      Math.max(50, (stopTime - ctx.currentTime + 0.06) * 1000)
+      Math.max(50, (voice.stopTime - ctx.currentTime + 0.1) * 1000)
     )
   }
 }
 
 export const tabSynth = new MidiTabSynth()
+
+/**
+ * Render a whole tab with the synth into a stereo AudioBuffer, so it can sit
+ * in the mixer as a lane alongside the real stems.
+ */
+export async function renderNotesToBuffer(
+  notes: TabNote[],
+  instrument: SynthInstrument,
+  durationSec: number,
+  sampleRate = 44100
+): Promise<AudioBuffer> {
+  const length = Math.max(1, Math.ceil(Math.max(0.5, durationSec) * sampleRate))
+  const ctx = new OfflineAudioContext(2, length, sampleRate)
+  const master = ctx.createGain()
+  master.gain.value = 0.9
+  // tame the peaks of dense strums
+  const limiter = ctx.createDynamicsCompressor()
+  limiter.threshold.value = -8
+  limiter.knee.value = 6
+  limiter.ratio.value = 6
+  limiter.attack.value = 0.003
+  limiter.release.value = 0.12
+  master.connect(limiter)
+  limiter.connect(ctx.destination)
+  for (const n of notes) {
+    if (n.start >= durationSec) continue
+    const dur = Math.max(0.12, n.end - n.start)
+    const velocity = Math.min(1.2, Math.max(0.3, n.amplitude || 0.8))
+    buildVoice(ctx, master, n.pitch, Math.max(0, n.start), dur, velocity, instrument)
+  }
+  return ctx.startRendering()
+}
+
+/** 16-bit PCM WAV encoder for exporting a rendered lane. */
+export function audioBufferToWav(buffer: AudioBuffer): Uint8Array {
+  const channels = buffer.numberOfChannels
+  const frames = buffer.length
+  const bytesPerSample = 2
+  const blockAlign = channels * bytesPerSample
+  const dataSize = frames * blockAlign
+  const out = new ArrayBuffer(44 + dataSize)
+  const view = new DataView(out)
+  const writeStr = (offset: number, s: string): void => {
+    for (let i = 0; i < s.length; i++) view.setUint8(offset + i, s.charCodeAt(i))
+  }
+  writeStr(0, 'RIFF')
+  view.setUint32(4, 36 + dataSize, true)
+  writeStr(8, 'WAVE')
+  writeStr(12, 'fmt ')
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)
+  view.setUint16(22, channels, true)
+  view.setUint32(24, buffer.sampleRate, true)
+  view.setUint32(28, buffer.sampleRate * blockAlign, true)
+  view.setUint16(32, blockAlign, true)
+  view.setUint16(34, 16, true)
+  writeStr(36, 'data')
+  view.setUint32(40, dataSize, true)
+  const chans = Array.from({ length: channels }, (_, c) => buffer.getChannelData(c))
+  let offset = 44
+  for (let i = 0; i < frames; i++) {
+    for (let c = 0; c < channels; c++) {
+      const v = Math.max(-1, Math.min(1, chans[c][i]))
+      view.setInt16(offset, v < 0 ? v * 0x8000 : v * 0x7fff, true)
+      offset += 2
+    }
+  }
+  return new Uint8Array(out)
+}

@@ -230,8 +230,31 @@ export async function ensureEngineDeps(): Promise<boolean> {
   }
 }
 
-const TAB_ENGINE_DEPS = ['basic_pitch', 'pretty_midi', 'scipy', 'resampy', 'librosa']
+/* tablature engine:
+   - basic-pitch (polyphonic guitar) is installed without its declared deps —
+     those pull TensorFlow / CoreML which don't build on every platform — and
+     runs on onnxruntime instead, which ships wheels for every OS we target
+   - torchcrepe (guitar lead f0 tracking) reuses the venv's torch
+   - resampy >= 0.4.3 is required: older releases import pkg_resources, which
+     modern setuptools no longer provides, and basic-pitch's pin is stale */
+const TAB_ENGINE_DEPS = ['basic_pitch', 'onnxruntime', 'pretty_midi', 'scipy', 'resampy', 'librosa', 'torchcrepe']
 let tabDepsReady = false
+
+function pipInstall(args: string[]): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn(venvPython(), ['-m', 'pip', 'install', '-q', ...args], { env: { ...process.env } })
+    let stderrTail = ''
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderrTail = (stderrTail + chunk.toString()).slice(-600)
+    })
+    child.on('close', (code) =>
+      code === 0
+        ? resolve()
+        : reject(new Error(`pip install ${args.join(' ')} failed (${code}): ${stderrTail.trim().split('\n').pop() ?? ''}`))
+    )
+    child.on('error', reject)
+  })
+}
 
 export async function ensureTabEngineDeps(): Promise<boolean> {
   if (tabDepsReady) return true
@@ -239,41 +262,33 @@ export async function ensureTabEngineDeps(): Promise<boolean> {
     await runCapture(
       venvPython(),
       ['-c', `import ${TAB_ENGINE_DEPS.join(', ')}`],
-      20000
+      30000
     )
     tabDepsReady = true
     return true
   } catch {}
-  sendEnvEvent('Preparing guitar tablature transcription engine…')
+  sendEnvEvent('Preparing the tablature engine (one-time download)…')
   try {
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn(
-        venvPython(),
-        ['-m', 'pip', 'install', '-q', 'pretty-midi', 'scipy', 'resampy', 'librosa', 'mir-eval'],
-        { env: { ...process.env } }
-      )
-      child.on('close', (code) =>
-        code === 0 ? resolve() : reject(new Error(`pip install tab deps failed (${code})`))
-      )
-      child.on('error', reject)
-    })
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn(
-        venvPython(),
-        ['-m', 'pip', 'install', '-q', '--no-deps', 'basic-pitch'],
-        { env: { ...process.env } }
-      )
-      child.on('close', (code) =>
-        code === 0 ? resolve() : reject(new Error(`pip install basic-pitch failed (${code})`))
-      )
-      child.on('error', reject)
-    })
+    await pipInstall([
+      'setuptools',
+      'resampy>=0.4.3',
+      'pretty-midi',
+      'scipy',
+      'librosa',
+      'mir-eval',
+      'scikit-learn',
+      'typing-extensions',
+      'onnxruntime',
+      'torchcrepe'
+    ])
+    await pipInstall(['--no-deps', 'basic-pitch'])
+    await runCapture(venvPython(), ['-c', `import ${TAB_ENGINE_DEPS.join(', ')}`], 30000)
     tabDepsReady = true
-    sendEnvEvent('Guitar tablature transcription engine ready', 'success')
+    sendEnvEvent('Tablature engine ready', 'success')
     return true
   } catch (err) {
     sendEnvEvent(
-      `Guitar tab engine setup failed: ${err instanceof Error ? err.message : String(err)}`,
+      `Tablature engine setup failed: ${err instanceof Error ? err.message : String(err)}`,
       'error'
     )
     return false

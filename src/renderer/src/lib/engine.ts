@@ -191,6 +191,35 @@ export class StemEngine {
     this.buffers = buffers
   }
 
+  /** Add or replace one lane without interrupting playback (used for synth lanes). */
+  addBuffer(id: StemId, buffer: AudioBuffer): void {
+    this.buffers = { ...this.buffers, [id]: buffer }
+    if (this.playing) this.align(this.expected())
+  }
+
+  removeBuffer(id: StemId): void {
+    const { [id]: _drop, ...rest } = this.buffers
+    this.buffers = rest
+    const gain = this.gains[id]
+    if (gain) {
+      try {
+        gain.disconnect()
+      } catch {}
+      delete this.gains[id]
+    }
+    if (this.playing) this.align(this.expected())
+  }
+
+  /** Playback speed. Pitch follows (tape-style); re-anchors so the clock stays exact. */
+  setRate(rate: number): void {
+    const next = Math.min(2, Math.max(0.25, rate))
+    if (next === this.rate) return
+    const pos = this.expected()
+    this.rate = next
+    if (this.playing) this.align(pos)
+    else this.anchorYt = pos
+  }
+
   hasBuffers(): boolean {
     return Object.keys(this.buffers).length > 0
   }

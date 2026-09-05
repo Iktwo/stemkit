@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef } from 'react'
 import type { StemId } from '../../../shared/types'
-import { DownloadIcon, GuitarIcon, BassIcon } from './Icons'
+import { DownloadIcon, GuitarIcon, BassIcon, XIcon } from './Icons'
 
 export interface StemMeta {
   id: StemId
   label: string
   color: string
   icon: React.ReactNode
+  synth?: boolean
 }
 
 const BUCKETS = 1200
@@ -51,6 +52,7 @@ interface Props {
   onSeek: (seconds: number) => void
   onExport?: () => void
   onOpenTabs?: () => void
+  onRemove?: () => void
   playing?: boolean
 }
 
@@ -69,6 +71,7 @@ export function StemLane({
   onSeek,
   onExport,
   onOpenTabs,
+  onRemove,
   playing = false
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -139,14 +142,21 @@ export function StemLane({
         audible ? 'opacity-100' : 'opacity-45'
       }`}
     >
-      <div className="flex items-center gap-2.5 w-36 shrink-0">
+      <div className="flex items-center gap-2.5 w-36 shrink-0 min-w-0">
         <span
-          className="flex items-center justify-center w-7 h-7 rounded-lg"
+          className="flex items-center justify-center w-7 h-7 rounded-lg shrink-0"
           style={{ background: `${meta.color}22`, color: meta.color }}
         >
           {meta.icon}
         </span>
-        <span className="text-sm font-medium capitalize">{meta.label}</span>
+        <div className="min-w-0">
+          <span className="block text-sm font-medium capitalize truncate leading-tight">{meta.label}</span>
+          {meta.synth && (
+            <span className="block text-[9px] font-semibold uppercase tracking-wider text-white/35 leading-tight">
+              from tab · MIDI
+            </span>
+          )}
+        </div>
       </div>
 
       <button
@@ -209,10 +219,20 @@ export function StemLane({
       {onExport && (
         <button
           onClick={onExport}
-          title="Export stem as WAV"
+          title={meta.synth ? 'Export rendered synth lane as WAV' : 'Export stem as WAV'}
           className="no-drag w-6 h-6 rounded-md bg-white/5 hover:bg-white/10 text-white/40 hover:text-white flex items-center justify-center transition-colors shrink-0"
         >
           <DownloadIcon className="w-3.5 h-3.5" />
+        </button>
+      )}
+
+      {onRemove && (
+        <button
+          onClick={onRemove}
+          title="Remove this lane from the mixer"
+          className="no-drag w-6 h-6 rounded-md bg-white/5 hover:bg-rose-500/20 text-white/40 hover:text-rose-300 flex items-center justify-center transition-colors shrink-0"
+        >
+          <XIcon className="w-3.5 h-3.5" />
         </button>
       )}
     </div>

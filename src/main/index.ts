@@ -3,7 +3,15 @@ import { join, normalize, extname } from 'path'
 import { existsSync, copyFileSync, writeFileSync, mkdirSync, createReadStream, statSync } from 'fs'
 import { createServer, type Server } from 'http'
 import type { AddressInfo } from 'net'
-import type { AppSettings, KaraokeData, GuitarTabData } from '../shared/types'
+import type {
+  AppSettings,
+  KaraokeData,
+  GuitarTabData,
+  TabInstrument,
+  TabTranscribeOptions,
+  TabRebuildOptions,
+  TabMidiImportOptions
+} from '../shared/types'
 import {
   detectTools,
   bootstrap,
@@ -21,7 +29,16 @@ import {
 } from './env'
 import { loadSettings, saveSettings } from './settings'
 import { loadSongs, removeSong, stemBuffers, stemsDir, stemsFor, mixWavPath, loadLyrics, saveLyrics, loadTabs, saveTabs, tabMidiPath } from './library'
-import { startJob, cancelJob, searchYouTube, transcribeLyrics, transcribeGuitarTab } from './pipeline'
+import {
+  startJob,
+  cancelJob,
+  searchYouTube,
+  transcribeLyrics,
+  transcribeGuitarTab,
+  rebuildGuitarTab,
+  importGuitarTabMidi,
+  listMidiTracks
+} from './pipeline'
 import { initUpdater } from './updater'
 import { runSmoke } from './smoke'
 import { getThumb } from './thumbs'
@@ -233,43 +250,52 @@ app.whenReady().then(async () => {
     saveLyrics(videoId, data)
     return true
   })
-  ipcMain.handle('tab:get', (_e, videoId: string, instrument?: 'guitar' | 'bass') =>
+  ipcMain.handle('tab:get', (_e, videoId: string, instrument?: TabInstrument) =>
     loadTabs(videoId, instrument ?? 'guitar')
   )
-  ipcMain.handle(
-    'tab:transcribe',
-    (
-      _e,
-      videoId: string,
-      tuning?: string,
-      position?: string,
-      sensitivity?: string,
-      mode?: 'chord' | 'note',
-      voicing?: string,
-      force?: boolean,
-      instrument?: 'guitar' | 'bass'
-    ) =>
-      transcribeGuitarTab(
-        videoId,
-        tuning,
-        position,
-        sensitivity,
-        mode,
-        voicing,
-        force ?? true,
-        instrument ?? 'guitar'
-      )
+  ipcMain.handle('tab:transcribe', (_e, videoId: string, opts: TabTranscribeOptions) =>
+    transcribeGuitarTab(videoId, { ...opts, instrument: opts?.instrument ?? 'guitar' })
+  )
+  ipcMain.handle('tab:rebuild', (_e, videoId: string, instrument: TabInstrument, opts: TabRebuildOptions) =>
+    rebuildGuitarTab(videoId, instrument ?? 'guitar', opts ?? {})
+  )
+  ipcMain.handle('tab:pickMidi', async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Import MIDI file',
+      properties: ['openFile'],
+      filters: [{ name: 'MIDI', extensions: ['mid', 'midi'] }]
+    })
+    if (result.canceled || !result.filePaths[0]) return null
+    return listMidiTracks(result.filePaths[0])
+  })
+  ipcMain.handle('tab:importMidi', (_e, videoId: string, opts: TabMidiImportOptions) =>
+    importGuitarTabMidi(videoId, { ...opts, instrument: opts?.instrument ?? 'guitar' })
   )
   ipcMain.handle(
     'tab:save',
-    (_e, videoId: string, data: GuitarTabData, instrument?: 'guitar' | 'bass') => {
+    (_e, videoId: string, data: GuitarTabData, instrument?: TabInstrument) => {
       saveTabs(videoId, data, instrument ?? 'guitar')
       return true
     }
   )
   ipcMain.handle(
+    'tab:exportSynth',
+    async (_e, videoId: string, instrument: TabInstrument, wav: Uint8Array) => {
+      const song = loadSongs().find((s) => s.videoId === videoId)
+      const baseName = sanitizeName(song?.title ?? `${instrument}-synth`)
+      const { canceled, filePath } = await dialog.showSaveDialog({
+        title: `Export ${instrument === 'bass' ? 'Bass' : 'Guitar'} synth track`,
+        defaultPath: join(app.getPath('downloads'), `${baseName} - ${instrument} synth.wav`),
+        filters: [{ name: 'WAV audio', extensions: ['wav'] }]
+      })
+      if (canceled || !filePath) return { saved: false }
+      writeFileSync(filePath, Buffer.from(wav.buffer, wav.byteOffset, wav.byteLength))
+      return { saved: true, path: filePath }
+    }
+  )
+  ipcMain.handle(
     'tab:exportMidi',
-    async (_e, videoId: string, instrument?: 'guitar' | 'bass') => {
+    async (_e, videoId: string, instrument?: TabInstrument) => {
       const inst = instrument ?? 'guitar'
       const midiFile = tabMidiPath(videoId, inst)
       if (!existsSync(midiFile)) {
@@ -289,7 +315,7 @@ app.whenReady().then(async () => {
   )
   ipcMain.handle(
     'tab:exportAscii',
-    async (_e, videoId: string, instrument?: 'guitar' | 'bass') => {
+    async (_e, videoId: string, instrument?: TabInstrument) => {
       const inst = instrument ?? 'guitar'
       const data = loadTabs(videoId, inst)
       if (!data?.asciiTab) {

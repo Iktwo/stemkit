@@ -8,10 +8,17 @@ import {
   type ReactNode,
   type ReactElement
 } from 'react'
-import type { Song, StemId } from '../../../shared/types'
+import type { Song, StemId, SynthLaneId } from '../../../shared/types'
 import { engine, decodePayload, type BufferMap } from './engine'
 
 export type PresetId = 'all' | 'karaoke' | 'acapella' | 'drumnbass' | 'custom'
+
+export interface LoopRegion {
+  start: number
+  end: number
+}
+
+export const PLAYBACK_RATES = [0.5, 0.65, 0.75, 0.9, 1] as const
 
 export function detectPreset(mutes: Set<StemId>, solos: Set<StemId>): PresetId {
   if (mutes.size === 0 && solos.size === 0) {
@@ -108,10 +115,18 @@ export interface PlayerContextValue {
   solos: Set<StemId>
   master: number
   preset: PresetId
+  // practice tools: tape-style speed (pitch follows) and an A-B loop
+  rate: number
+  loop: LoopRegion | null
   getPosition: () => number
   loadSong: (song: Song, autoPlay?: boolean) => Promise<void>
   togglePlay: () => void
   seekTo: (seconds: number) => void
+  setRate: (rate: number) => void
+  setLoop: (loop: LoopRegion | null) => void
+  // lanes rendered from a tab's notes; live in the mixer like a stem
+  addSynthLane: (id: SynthLaneId, buffer: AudioBuffer) => void
+  removeSynthLane: (id: SynthLaneId) => void
   setStemVolume: (id: StemId, vol: number) => void
   toggleStemMute: (id: StemId) => void
   setStemMute: (id: StemId, muted: boolean) => void
@@ -135,6 +150,10 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
   const [solos, setSolos] = useState<Set<StemId>>(new Set())
   const [master, setMaster] = useState(0.9)
   const [preset, setPreset] = useState<PresetId>('all')
+  const [rate, setRateState] = useState(1)
+  const [loop, setLoopState] = useState<LoopRegion | null>(null)
+  const loopRef = useRef<LoopRegion | null>(null)
+  loopRef.current = loop
 
   const posRef = useRef(0)
   const playingRef = useRef(false)
@@ -167,18 +186,24 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
     engine.applyMix(vols, mutes, solos, master)
   }, [vols, mutes, solos, master])
 
-  // Monitor track completion to automatically stop at the end
+  // Monitor playback: wrap the A-B loop and stop at the end of the track
   useEffect(() => {
     if (!playing || duration <= 0) return
     const interval = setInterval(() => {
       const pos = engine.expected()
+      const region = loopRef.current
+      if (region && region.end > region.start + 0.2 && pos >= region.end - 0.015) {
+        posRef.current = region.start
+        engine.align(region.start)
+        return
+      }
       if (pos >= duration) {
         posRef.current = 0
         engine.setPlaying(false, 0)
         playingRef.current = false
         setPlaying(false)
       }
-    }, 200)
+    }, 50)
     return () => clearInterval(interval)
   }, [playing, duration])
 
@@ -201,6 +226,53 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
   const seekTo = useCallback((t: number): void => {
     posRef.current = t
     engine.align(t)
+  }, [])
+
+  const setRate = useCallback((r: number): void => {
+    engine.setRate(r)
+    if (!playingRef.current) posRef.current = engine.expected()
+    setRateState(engine.rate)
+  }, [])
+
+  const setLoop = useCallback((region: LoopRegion | null): void => {
+    const next =
+      region && region.end > region.start + 0.2
+        ? { start: Math.max(0, region.start), end: region.end }
+        : region
+    loopRef.current = next
+    setLoopState(next)
+  }, [])
+
+  const addSynthLane = useCallback((id: SynthLaneId, buffer: AudioBuffer): void => {
+    engine.addBuffer(id, buffer)
+    setBuffers((prev) => ({ ...prev, [id]: buffer }))
+    setVols((prev) => ({ ...prev, [id]: prev[id] ?? 0.9 }))
+  }, [])
+
+  const removeSynthLane = useCallback((id: SynthLaneId): void => {
+    engine.removeBuffer(id)
+    setBuffers((prev) => {
+      const { [id]: _drop, ...rest } = prev
+      return rest
+    })
+    setVols((prev) => {
+      const { [id]: _drop, ...rest } = prev
+      return rest
+    })
+    setMutes((prev) => {
+      if (!prev.has(id)) return prev
+      const next = new Set(prev)
+      next.delete(id)
+      mutesRef.current = next
+      return next
+    })
+    setSolos((prev) => {
+      if (!prev.has(id)) return prev
+      const next = new Set(prev)
+      next.delete(id)
+      solosRef.current = next
+      return next
+    })
   }, [])
 
   const setStemVolume = useCallback((id: StemId, vol: number): void => {
@@ -316,6 +388,8 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
     setPreset('all')
     presetRef.current = 'all'
     customMixRef.current = null
+    loopRef.current = null
+    setLoopState(null)
   }, [])
 
   const loadSong = useCallback(
@@ -338,6 +412,8 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
       playingRef.current = false
       setPlaying(false)
       posRef.current = 0
+      loopRef.current = null
+      setLoopState(null)
 
       // Fast-path: if song is already cached in memory, switch immediately without flashing!
       const cached = bufferCache.get(song.videoId)
@@ -457,10 +533,16 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
     solos,
     master,
     preset,
+    rate,
+    loop,
     getPosition,
     loadSong,
     togglePlay,
     seekTo,
+    setRate,
+    setLoop,
+    addSynthLane,
+    removeSynthLane,
     setStemVolume,
     toggleStemMute,
     setStemMute,

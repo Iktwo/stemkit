@@ -10,7 +10,7 @@ import {
 import { parseVideoId } from '../../../shared/url'
 import { STEM_INFO, PREFERRED_ORDER } from '../lib/stems'
 import { fmtTime } from '../lib/format'
-import { GearIcon } from './Icons'
+import { GearIcon, GuitarIcon, BassIcon, MicIcon, LoopIcon } from './Icons'
 
 interface Props {
   hasSongs: boolean
@@ -132,6 +132,22 @@ export function Home({
           <p className="text-white/45 text-[14px]">
             Powered by SOTA BS-RoFormer — 100% private and processed on your device.
           </p>
+          <div className="flex items-center justify-center gap-2 flex-wrap pt-1">
+            {[
+              { icon: <GuitarIcon className="w-3 h-3" />, label: 'Guitar tabs', color: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' },
+              { icon: <BassIcon className="w-3 h-3" />, label: 'Bass tabs', color: 'text-amber-300 bg-amber-500/10 border-amber-500/20' },
+              { icon: <MicIcon className="w-3 h-3" />, label: 'Karaoke lyrics', color: 'text-pink-300 bg-pink-500/10 border-pink-500/20' },
+              { icon: <LoopIcon className="w-3 h-3" />, label: 'Loop & slow-down practice', color: 'text-sky-300 bg-sky-500/10 border-sky-500/20' }
+            ].map((f) => (
+              <span
+                key={f.label}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border ${f.color}`}
+              >
+                {f.icon}
+                {f.label}
+              </span>
+            ))}
+          </div>
         </div>
 
         {/* Search / Paste Input */}
@@ -335,7 +351,7 @@ export function Home({
 
         {!hasSongs && results.length === 0 && !searching && (
           <p className="mt-8 text-center text-xs text-white/25 leading-relaxed">
-            Fast Apple Silicon MPS separation · Full 6-stem frequency band isolation
+            Fast Apple Silicon MPS separation · Full 6-stem isolation · Tabs transcribed from the isolated guitar and bass, or imported from any MIDI file
           </p>
         )}
       </div>
