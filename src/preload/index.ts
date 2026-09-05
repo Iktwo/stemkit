@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
-import type { JobEvent, EnvEvent, UpdateEvent, StemKitApi } from '../shared/types'
+import type { JobEvent, EnvEvent, UpdateEvent, AppSettings, StemKitApi } from '../shared/types'
 
 function subscribe<T>(channel: string, cb: (data: T) => void): () => void {
   const handler = (_e: IpcRendererEvent, data: T): void => cb(data)
@@ -24,9 +24,16 @@ const api: StemKitApi = {
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   getAppVersion: () => ipcRenderer.invoke('app:version'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
+  getSettings: () => ipcRenderer.invoke('settings:get'),
+  setSettings: (patch) => ipcRenderer.invoke('settings:set', patch),
+  trackEvent: (name, params) => ipcRenderer.send('analytics:track', name, params),
+  getThumb: (videoId) => ipcRenderer.invoke('thumb:get', videoId),
+  enginesStatus: () => ipcRenderer.invoke('engines:status'),
+  fetchEngine: (which) => ipcRenderer.invoke('engines:fetch', which),
   onUpdateEvent: (cb) => subscribe<UpdateEvent>('update:event', cb),
   onJobEvent: (cb) => subscribe<JobEvent>('job:event', cb),
-  onEnvEvent: (cb) => subscribe<EnvEvent>('env:event', cb)
+  onEnvEvent: (cb) => subscribe<EnvEvent>('env:event', cb),
+  onSettingsChange: (cb) => subscribe<AppSettings>('settings:changed', cb)
 }
 
 contextBridge.exposeInMainWorld('stemkit', api)

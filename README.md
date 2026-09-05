@@ -25,15 +25,20 @@ Everything runs locally — no accounts, no cloud, no API keys.
 - Per-stem mute/solo/volume, waveforms with click-to-seek
 - Parallel background splitting with live progress
 - Export any stem (or all) as WAV
-- Fully offline after setup — separation runs on Apple MPS / CPU, ffmpeg included
+- Fully offline after setup — separation runs on Apple Silicon (MPS), NVIDIA GPUs (CUDA) or CPU; ffmpeg included
 
 ## Download
 
-Grab installers from [Releases](https://github.com/danielravina/stemkit/releases):
+Grab installers from [Releases](https://github.com/danvelope/stemkit/releases):
 - **macOS** (Apple Silicon): `StemKit-x.y.z-mac-arm64.dmg`
 - **Windows**: `StemKit-Setup-x.y.z.exe` (installer) or portable `.zip`
 
-First launch creates a private Python environment and downloads the separation engine (~2 GB, one time) plus model weights (~80 MB). ffmpeg is bundled — nothing else to install.
+First launch creates a private Python environment and downloads the separation engine (~2 GB) — one time. ffmpeg is bundled — nothing else to install.
+
+Optional quality upgrades live behind a gear icon in the app (Settings), each with its own one-time download:
+- **Studio-quality vocals** (Mel-Band Roformer): +913 MB — runs on GPU or CPU (CPU is slower)
+- **Fine-tuned demucs** (htdemucs_ft): +~320 MB, up to 4× slower
+- **Refinement passes**: 2 shifts instead of 1, up to 3× slower
 
 > **macOS first launch**: builds are signed with a Developer ID but not notarized, so macOS may say it "cannot verify the developer". One-time fix: **System Settings → Privacy & Security → Open Anyway** (or `xattr -cr /Applications/StemKit.app`).
 >
@@ -103,7 +108,8 @@ Local Web Audio API stem playback · per-stem volume / solo / mute faders
 src/main         Electron main process (pipeline, env bootstrap, library)
 src/preload      IPC bridge
 src/renderer     React UI (player, waveforms, mini player, audio engine)
-python/          separate.py — demucs wrapper with JSON progress output
+python/          separate.py (BS-RoFormer / demucs) with JSON progress output
+python/vendor/   vendor model code
 scripts/         node runner, ffmpeg fetchers
 build/           icon sources
 ```

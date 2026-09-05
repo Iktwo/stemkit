@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  MODEL_DEFAULT,
   MODEL_EXTENDED,
   DEFAULT_STEMS,
+  type AppSettings,
   type SearchResult,
   type Song,
   type StemId
@@ -9,18 +11,29 @@ import {
 import { parseVideoId } from '../../../shared/url'
 import { STEM_INFO, PREFERRED_ORDER } from '../lib/stems'
 import { fmtTime } from '../lib/format'
+import { GearIcon } from './Icons'
 
 interface Props {
   hasSongs: boolean
   songs: Song[]
   pending?: Record<string, { label: string; error?: boolean }>
+  settings?: AppSettings
   onStart: (url: string, model: string, stems?: string[]) => void
   onSelect: (videoId: string) => void
+  onOpenSettings: () => void
 }
 
 const ALL_STEMS = PREFERRED_ORDER
 
-export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props): React.ReactElement {
+export function Home({
+  hasSongs,
+  songs,
+  pending = {},
+  settings,
+  onStart,
+  onSelect,
+  onOpenSettings
+}: Props): React.ReactElement {
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<Set<StemId>>(new Set<StemId>(DEFAULT_STEMS as StemId[]))
   const [results, setResults] = useState<SearchResult[]>([])
@@ -30,7 +43,35 @@ export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props
   const seqRef = useRef(0)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  const usesExtended = [...selected].some((id) => id === 'guitar' || id === 'piano')
+  const derivedModel = usesExtended ? MODEL_EXTENDED : MODEL_DEFAULT
   const orderedSelection = ALL_STEMS.filter((id) => selected.has(id))
+  // the fine-tuned engine only covers the standard 4-stem split; guitar and
+  // piano always run through the 6-source engine, so they're unavailable
+  // while it's on
+  const ftOn = !!settings?.htdemucsFt
+  useEffect(() => {
+    if (!ftOn) return
+    setSelected((prev) => {
+      if (!prev.has('guitar') && !prev.has('piano')) return prev
+      const next = new Set(prev)
+      next.delete('guitar')
+      next.delete('piano')
+      return next
+    })
+  }, [ftOn])
+  const engineLabel = usesExtended
+    ? '6-source engine'
+    : settings?.roformerVocals
+      ? 'studio engine'
+      : settings?.htdemucsFt
+        ? 'enhanced engine'
+        : 'standard engine'
+  const timeHint = usesExtended || settings?.roformerVocals
+    ? 'A 4-minute song takes about three minutes to split.'
+    : settings?.htdemucsFt || settings?.shifts === 2
+      ? 'A 4-minute song takes a little longer with the quality options on.'
+      : 'A 4-minute song takes about three minutes to split.'
 
   const toggleStem = (id: StemId): void => {
     setSelected((prev) => {
@@ -48,7 +89,7 @@ export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props
   const startWithSelection = (videoIdOrUrl: string): void => {
     onStart(
       videoIdOrUrl.startsWith('http') ? videoIdOrUrl : `https://www.youtube.com/watch?v=${videoIdOrUrl}`,
-      MODEL_EXTENDED,
+      derivedModel,
       orderedSelection
     )
   }
@@ -153,11 +194,11 @@ export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props
               <span className="text-[11px] font-semibold text-olive-300 bg-olive-500/15 px-2 py-0.5 rounded-full border border-olive-500/25">
                 {selected.size === 0
                   ? 'select at least 1'
-                  : `${selected.size} ${selected.size === 1 ? 'stem' : 'stems'} selected`}
+                  : `${engineLabel} · ${selected.size} ${selected.size === 1 ? 'stem' : 'stems'}`}
               </span>
             </div>
 
-            {/* Quick Presets */}
+            {/* Quick Presets and Settings */}
             <div className="flex items-center gap-1.5 text-[11px]">
               <span className="text-white/30 mr-0.5">Presets:</span>
               <button
@@ -188,12 +229,20 @@ export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props
               >
                 Solo Piano
               </button>
+              <button
+                onClick={onOpenSettings}
+                title="Settings"
+                className="no-drag ml-1 w-6 h-6 rounded-md hover:bg-white/10 text-white/35 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+              >
+                <GearIcon className="w-3.5 h-3.5" />
+              </button>
             </div>
           </div>
 
           {/* Instrument Pills */}
           <div className="flex items-center gap-2 flex-wrap">
             {ALL_STEMS.map((id) => {
+              if (ftOn && (id === 'guitar' || id === 'piano')) return null
               const info = STEM_INFO[id]
               const on = selected.has(id)
               return (
@@ -317,6 +366,7 @@ export function Home({ hasSongs, songs, pending = {}, onStart, onSelect }: Props
         {!hasSongs && results.length === 0 && !searching && (
           <p className="mt-8 text-center text-xs text-white/25 leading-relaxed">
             Fast Apple Silicon MPS separation · Full 6-stem frequency band isolation
+            <span className="block mt-1 text-white/20">{timeHint}</span>
           </p>
         )}
       </div>

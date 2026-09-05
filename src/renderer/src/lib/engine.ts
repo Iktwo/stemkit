@@ -7,11 +7,16 @@ export async function decodePayload(
 ): Promise<BufferMap> {
   const ctx = new AudioContext()
   void ctx.resume()
+  const ids = Object.keys(payload)
+  // decodeAudioData detaches the source buffer — the IPC payload is throwaway,
+  // so hand it over as-is (skips a full copy per stem)
+  const decoded = await Promise.all(
+    ids.map((id) => ctx.decodeAudioData(payload[id].buffer as ArrayBuffer))
+  )
   const out: BufferMap = {}
-  for (const id of Object.keys(payload)) {
-    const copy = payload[id].slice()
-    out[id as StemId] = await ctx.decodeAudioData(copy.buffer as ArrayBuffer)
-  }
+  ids.forEach((id, i) => {
+    out[id as StemId] = decoded[i]
+  })
   return out
 }
 

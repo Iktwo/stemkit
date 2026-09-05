@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import struct
 import sys
 import time
 import wave
@@ -38,17 +39,19 @@ def load_wav(path):
     return audio, sr
 
 
-def save_wav(path, data, sr):
-    interleaved = data.T
-    peak = max(1e-9, float(np.abs(interleaved).max()))
-    if peak > 1.0:
-        interleaved = interleaved / peak * 0.999
-    pcm = (interleaved * 32767.0).astype("<i2")
-    with wave.open(path, "wb") as w:
-        w.setnchannels(pcm.shape[1])
-        w.setsampwidth(2)
-        w.setframerate(sr)
-        w.writeframes(pcm.tobytes())
+def save_wav_f32(path, data, sr):
+    """write a 32-bit float wav (fmt tag 3); values above 1.0 are preserved"""
+    channels, _ = data.shape
+    payload = data.T.astype("<f4").tobytes()
+    block_align = channels * 4
+    header = b"RIFF" + struct.pack("<I", 36 + len(payload)) + b"WAVE"
+    header += b"fmt " + struct.pack(
+        "<IHHIIHH", 16, 3, channels, sr, sr * block_align, block_align, 32
+    )
+    header += b"data" + struct.pack("<I", len(payload))
+    with open(path, "wb") as f:
+        f.write(header)
+        f.write(payload)
 
 
 def separate_roformer(audio, sr, out_dir, wanted, device_name="auto"):
@@ -185,10 +188,18 @@ def separate_demucs(audio, sr, out_dir, model_name, wanted, device_name="auto", 
     is_module = not hasattr(raw_tqdm, "update")
     real_tqdm = raw_tqdm.tqdm if is_module else raw_tqdm
 
+    # demucs runs one tqdm per "leg" (bag model x shift), each sweeping 0-100
+    # on its own. The UI expects a single monotonic sweep for the whole call,
+    # so legs are counted globally: pct = (legs_done + leg_frac) / legs.
+    # legs_total is filled in once the model is loaded (the patch installs
+    # before that point)
+    leg_state = {"done": 0, "total": 0, "last": -1.0, "legs": 0}
+
     class ProgressTqdm(real_tqdm):
         def __init__(self, *a, **kw):
             super().__init__(*a, **kw)
-            self._last = 0.0
+            if self.total:
+                leg_state["total"] = self.total
 
         def update(self, n=1):
             super().update(n)
@@ -196,17 +207,25 @@ def separate_demucs(audio, sr, out_dir, model_name, wanted, device_name="auto", 
 
         def close(self):
             self._report(True)
+            if self.total and self.n >= self.total:
+                leg_state["done"] += 1
             super().close()
 
         def _report(self, force):
-            total = self.total or 0
+            legs = leg_state["legs"]
+            if not legs:
+                return
+            total = leg_state["total"] or self.total or 0
             if not total:
                 return
             frac = min(1.0, max(0.0, self.n / total))
             now = time.time()
-            if force or now - self._last >= 0.5:
-                emit(type="progress", stage="separate", pct=int(frac * 100))
-                self._last = now
+            if force or now - leg_state["last"] >= 0.5:
+                global_pct = int(
+                    ((leg_state["done"] + frac) / legs) * 100
+                )
+                emit(type="progress", stage="separate", pct=min(99, global_pct))
+                leg_state["last"] = now
 
     dapply.tqdm = types.SimpleNamespace(tqdm=ProgressTqdm) if is_module else ProgressTqdm
 
@@ -214,6 +233,8 @@ def separate_demucs(audio, sr, out_dir, model_name, wanted, device_name="auto", 
         device = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
     else:
         device = device_name
+    if device == "cuda" and not torch.cuda.is_available():
+        fail("GPU engine not available (no NVIDIA GPU, or the CUDA build of torch is not installed)")
     emit(type="progress", stage="model", pct=0, message=f"loading {model_name} on {device}")
 
     try:
@@ -222,13 +243,14 @@ def separate_demucs(audio, sr, out_dir, model_name, wanted, device_name="auto", 
         fail(f"model load failed: {e}")
     model.to(device)
     model.eval()
+    leg_state["legs"] = max(1, len(getattr(model, "models", [1]))) * max(1, shifts)
 
     target_sr = model.samplerate
     if sr != target_sr:
+        import torchaudio
+
         t = torch.from_numpy(audio)
-        t = torch.nn.functional.interpolate(
-            t.unsqueeze(0), scale_factor=target_sr / sr, mode="linear", align_corners=False
-        ).squeeze(0)
+        t = torchaudio.functional.resample(t, sr, target_sr)
         audio = t.numpy()
         sr = target_sr
     if audio.shape[0] == 1:

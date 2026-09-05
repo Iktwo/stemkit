@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'fs'
+import { readFile } from 'fs/promises'
 import { join } from 'path'
 import { userDataDir } from './env'
 import { DEFAULT_STEMS, type Song } from '../shared/types'
@@ -66,14 +67,17 @@ export function stemsPresent(videoId: string, stems: string[]): boolean {
   return stems.every((name) => existsSync(join(dir, `${name}.wav`)))
 }
 
-export function stemBuffers(videoId: string, stems?: string[]): Record<string, Uint8Array> {
+export async function stemBuffers(videoId: string, stems?: string[]): Promise<Record<string, Uint8Array>> {
   const list = stems ?? stemsFor(loadSongs().find((s) => s.videoId === videoId))
   const dir = stemsDir(videoId)
   const out: Record<string, Uint8Array> = {}
-  for (const name of list) {
-    const file = join(dir, `${name}.wav`)
-    if (!existsSync(file)) throw new Error(`Missing stem ${name} for ${videoId}`)
-    out[name] = new Uint8Array(readFileSync(file))
-  }
+  // async parallel reads so ~400MB of WAV doesn't block the main process
+  await Promise.all(
+    list.map(async (name) => {
+      const file = join(dir, `${name}.wav`)
+      if (!existsSync(file)) throw new Error(`Missing stem ${name} for ${videoId}`)
+      out[name] = new Uint8Array(await readFile(file))
+    })
+  )
   return out
 }

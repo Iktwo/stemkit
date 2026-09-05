@@ -5,3 +5,8 @@ extras
 listening-list.md
 *.log
 .DS_Store
+
+__pycache__/
+*.pyc
+.plans/
+.env

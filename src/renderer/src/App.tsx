@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   MODEL_EXTENDED,
+  type AppSettings,
   type EnvStatus,
   type JobProgress,
   type JobStage,
@@ -14,6 +15,7 @@ import { Processing } from './components/Processing'
 import { Player } from './components/Player'
 import { MiniPlayer } from './components/MiniPlayer'
 import { Setup } from './components/Setup'
+import { Settings } from './components/Settings'
 import { LogoMark } from './components/Icons'
 import { PlayerProvider, usePlayer, clearBufferCache } from './lib/PlayerContext'
 
@@ -53,6 +55,8 @@ function MainApp(): React.ReactElement {
   const [envLogs, setEnvLogs] = useState<EnvLog[]>([])
   const [update, setUpdate] = useState<UpdateEvent | null>(null)
   const [appVersion, setAppVersion] = useState<string | undefined>(undefined)
+  const [settings, setSettings] = useState<AppSettings | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   const {
     currentSong,
@@ -69,6 +73,8 @@ function MainApp(): React.ReactElement {
   useEffect(() => {
     void window.stemkit.envStatus().then(setStatus)
     void window.stemkit.listSongs().then(setSongs)
+    void window.stemkit.getSettings().then(setSettings)
+    const offSettings = window.stemkit.onSettingsChange(setSettings)
     const offJob = window.stemkit.onJobEvent((ev) => {
       if (ev.kind === 'progress') {
         setJobs((prev) => ({ ...prev, [ev.data.videoId]: ev.data }))
@@ -94,6 +100,7 @@ function MainApp(): React.ReactElement {
       offJob()
       offEnv()
       offUpdate()
+      offSettings()
     }
   }, [])
 
@@ -107,6 +114,7 @@ function MainApp(): React.ReactElement {
     async (url: string, model = MODEL_EXTENDED, stems?: string[], force = false): Promise<void> => {
       const vid = parseVideoId(url)
       if (!vid) return
+      setActiveId(vid)
       setLastUrl(url)
       setLastModel(model)
       setErrors((prev) => withoutKey(prev, vid))
@@ -251,15 +259,27 @@ function MainApp(): React.ReactElement {
       />
     )
   } else if (activeSong) {
-    main = <Player key={activeSong.videoId} song={activeSong} onReprocess={handleReprocess} />
+    main = (
+      <Player
+        key={activeSong.videoId}
+        song={activeSong}
+        settings={settings ?? undefined}
+        onReprocess={handleReprocess}
+      />
+    )
   } else {
     main = (
       <Home
         hasSongs={displaySongs.length > 0}
         songs={displaySongs}
         pending={pendingMap}
+        settings={settings ?? undefined}
         onStart={(u, m, s) => void startUrl(u, m, s)}
         onSelect={(id) => setActiveId(id)}
+        onOpenSettings={() => {
+          void window.stemkit.envStatus().then(setStatus)
+          setSettingsOpen(true)
+        }}
       />
     )
   }
@@ -282,6 +302,10 @@ function MainApp(): React.ReactElement {
         onDelete={(id) => void deleteSong(id)}
         onAdd={() => setActiveId(null)}
         onInstallUpdate={() => window.stemkit.installUpdate()}
+        onOpenSettings={() => {
+          void window.stemkit.envStatus().then(setStatus)
+          setSettingsOpen(true)
+        }}
       />
       <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden relative">
         <main className="flex-1 min-w-0 overflow-hidden relative">
@@ -302,6 +326,15 @@ function MainApp(): React.ReactElement {
           />
         )}
       </div>
+      {settings && settingsOpen && (
+        <Settings
+          settings={settings}
+          gpu={status.gpu}
+          nvidiaGpu={status.nvidiaGpu}
+          onChange={(patch) => void window.stemkit.setSettings(patch)}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
     </div>
   )
 }

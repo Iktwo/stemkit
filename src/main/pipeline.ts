@@ -7,9 +7,11 @@ import {
   venvPython,
   venvYtDlp,
   separateScript,
+  ensureGpuEngine,
   getStatus,
   ytDlpRuntimeArgs
 } from './env'
+import { loadSettings } from './settings'
 import {
   songDir,
   stemsDir,
@@ -20,8 +22,10 @@ import {
   upsertSong,
   loadSongs
 } from './library'
-import type { JobEvent, JobStage } from '../shared/types'
+import { MODEL_EXTENDED, type JobEvent, type JobStage } from '../shared/types'
 import { parseVideoId } from '../shared/url'
+import { track } from './analytics'
+import { cacheThumbnail } from './thumbs'
 
 interface ActiveJob {
   videoId: string
@@ -78,9 +82,17 @@ function updateQueuePositions(): void {
 async function executeJob(job: ActiveJob, url: string, stems?: string[]): Promise<void> {
   currentRunningJob = job
   const videoId = job.videoId
+  const startedAt = Date.now()
 
   const bail = (message: string): never => {
     throw Object.assign(new Error(message), { videoId })
+  }
+
+  const settings = loadSettings()
+  const useGpu = settings.gpuSplit && process.platform === 'win32'
+  const deviceArg = (): string => {
+    if (process.platform === 'win32') return useGpu ? 'cuda' : 'cpu'
+    return 'auto'
   }
 
   try {
@@ -110,6 +122,8 @@ async function executeJob(job: ActiveJob, url: string, stems?: string[]): Promis
           title: typeof parsed.title === 'string' ? parsed.title : 'Unknown title',
           duration: typeof parsed.duration === 'number' ? Math.round(parsed.duration) : 0
         }
+        // Warm thumbnail cache locally for offline library browsing
+        void cacheThumbnail(videoId, typeof parsed.thumbnail === 'string' ? parsed.thumbnail : undefined)
       } catch {
         bail('Could not read video metadata')
       }
@@ -160,6 +174,8 @@ async function executeJob(job: ActiveJob, url: string, stems?: string[]): Promis
         '-y',
         '-i',
         rawPath,
+        '-af',
+        'aresample=44100:resampler=soxr',
         '-ar',
         '44100',
         '-ac',
@@ -183,6 +199,17 @@ async function executeJob(job: ActiveJob, url: string, stems?: string[]): Promis
     )
 
     if (job.cancelled || !jobs.has(videoId)) return
+    if (useGpu) {
+      if (
+        !(await ensureGpuEngine(
+          (pct) => progress(job, 'separate', 0, `Downloading GPU engine: ${pct}%`),
+          true
+        ))
+      ) {
+        bail('Could not prepare the GPU engine — switch back to CPU in Settings and try again')
+      }
+    }
+
     progress(job, 'separate', 0, 'Separating stems')
     let scriptError: string | null = null
     let producedStems: string[] | null = null
@@ -198,7 +225,9 @@ async function executeJob(job: ActiveJob, url: string, stems?: string[]): Promis
         '--model',
         job.model,
         '--device',
-        'auto',
+        deviceArg(),
+        '--shifts',
+        String(settings.shifts),
         ...(stems?.length ? ['--only', stems.join(',')] : [])
       ],
       {
@@ -231,18 +260,22 @@ async function executeJob(job: ActiveJob, url: string, stems?: string[]): Promis
     if (!stemsPresent(videoId, finalStems)) bail('Separation finished but stem files are missing')
 
     progress(job, 'finalize', 100, 'Adding to library')
+    const took = Math.round((Date.now() - startedAt) / 1000)
     const songs = upsertSong({
       videoId,
       title: meta!.title,
       duration: meta!.duration,
       addedAt: existing?.addedAt ?? Date.now(),
       model: job.model,
-      stems: finalStems
+      stems: finalStems,
+      took
     })
+    track('split_completed', { model: job.model, stems: finalStems.length, took })
     send({ kind: 'done', data: { videoId, song: songs[0] } })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     if (message !== 'cancelled') {
+      track('split_failed', { model: job.model })
       send({ kind: 'failed', data: { videoId, message } })
     }
   } finally {
@@ -269,7 +302,7 @@ function processNextInQueue(): void {
 
 export async function startJob(
   rawUrl: string,
-  model = 'bs_roformer',
+  model = MODEL_EXTENDED,
   stems?: string[],
   force = false
 ): Promise<void> {
@@ -306,6 +339,32 @@ export async function startJob(
   }
 
   void executeJob(job, url, stems)
+}
+
+export async function reprocessTrack(
+  videoId: string,
+  model = MODEL_EXTENDED,
+  stems?: string[]
+): Promise<void> {
+  const existing = loadSongs().find((s) => s.videoId === videoId)
+  if (!existing || !existsSync(mixWavPath(videoId))) {
+    send({ kind: 'failed', data: { videoId, message: 'Track mix file not found' } })
+    return
+  }
+
+  // Cancel any existing job for this videoId
+  cancelJob(videoId)
+
+  const job: ActiveJob = { videoId, model, cancelled: false, title: existing.title }
+  jobs.set(videoId, job)
+
+  if (currentRunningJob !== null) {
+    queue.push({ url: '', videoId, model, stems, force: true })
+    progress(job, 'metadata', 0, `In queue (position #${queue.length})`)
+    return
+  }
+
+  void executeJob(job, '', stems)
 }
 
 function runProcess(
@@ -400,7 +459,7 @@ export async function searchYouTube(query: string): Promise<
   try {
     const data = JSON.parse(results)
     const entries = Array.isArray(data.entries) ? data.entries : []
-    return entries
+    const mapped = entries
       .filter((e: Record<string, unknown>) => typeof e.id === 'string' && typeof e.title === 'string')
       .map((e: Record<string, unknown>) => ({
         videoId: e.id as string,
@@ -413,6 +472,8 @@ export async function searchYouTube(query: string): Promise<
               : undefined,
         duration: typeof e.duration === 'number' ? Math.round(e.duration) : undefined
       }))
+    track('search', { results: mapped.length })
+    return mapped
   } catch {
     return []
   }

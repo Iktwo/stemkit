@@ -1,7 +1,8 @@
 import { useState, useMemo } from 'react'
 import type { Song } from '../../../shared/types'
 import { fmtTime } from '../lib/format'
-import { TrashIcon, PlusIcon } from './Icons'
+import { Thumb } from '../lib/thumbs'
+import { LogoMark, TrashIcon, PlusIcon, GearIcon } from './Icons'
 
 interface Props {
   songs: Song[]
@@ -15,6 +16,7 @@ interface Props {
   onDelete: (videoId: string) => void
   onAdd: () => void
   onInstallUpdate: () => void
+  onOpenSettings: () => void
 }
 
 export function Sidebar({
@@ -28,7 +30,8 @@ export function Sidebar({
   onSelect,
   onDelete,
   onAdd,
-  onInstallUpdate
+  onInstallUpdate,
+  onOpenSettings
 }: Props): React.ReactElement {
   const [search, setSearch] = useState('')
 
@@ -40,8 +43,18 @@ export function Sidebar({
 
   return (
     <aside className="w-[280px] shrink-0 h-full flex flex-col border-r border-white/[0.08] bg-black/30 backdrop-blur-xl select-none">
-      {/* Window drag header without branding badge */}
-      <div className="drag-region h-10 shrink-0" />
+      {/* Window drag header with branding badge and settings button */}
+      <div className="drag-region h-14 shrink-0 flex items-center gap-2.5 pl-[80px] pr-4">
+        <LogoMark />
+        <span className="font-semibold tracking-tight text-[15px] text-white">StemKit</span>
+        <button
+          onClick={onOpenSettings}
+          title="Settings"
+          className="no-drag ml-auto w-7 h-7 rounded-lg bg-white/5 hover:bg-white/10 text-white/50 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+        >
+          <GearIcon className="w-3.5 h-3.5" />
+        </button>
+      </div>
 
       {/* Top Action: New Split */}
       <div className="px-3 pb-3">
@@ -110,13 +123,11 @@ export function Sidebar({
               }`}
             >
               <div className="relative shrink-0">
-                <img
-                  src={`https://i.ytimg.com/vi/${song.videoId}/default.jpg`}
-                  alt=""
-                  className={`w-12 h-7 rounded-md object-cover bg-white/5 shadow-sm ${
+                <Thumb
+                  videoId={song.videoId}
+                  className={`w-12 h-7 rounded-md object-cover bg-white/5 block shadow-sm ${
                     working ? 'opacity-50' : ''
                   }`}
-                  draggable={false}
                 />
                 {working && (
                   <span className="absolute inset-0 flex items-center justify-center">

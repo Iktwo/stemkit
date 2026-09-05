@@ -23,9 +23,7 @@ export function Setup({ status, logs, onInstall }: Props): React.ReactElement {
           <h1 className="text-xl font-bold tracking-tight">Welcome to StemKit</h1>
         </div>
         <p className="text-center text-white/45 text-sm mt-3 leading-relaxed">
-          One-time setup downloads the separation engine (~2 GB).
-          <br />
-          After that everything works offline, right on your machine.
+          One-time setup — after this everything works offline, right on your machine.
         </p>
 
         {!status.bootstrapping && (
@@ -33,7 +31,7 @@ export function Setup({ status, logs, onInstall }: Props): React.ReactElement {
             onClick={onInstall}
             className="mt-7 w-full py-3.5 rounded-xl bg-white text-black font-semibold text-sm hover:bg-white/90 active:scale-[0.99] transition-all"
           >
-            Get started · ~2 GB, once
+            Get started (~2 GB, one time)
           </button>
         )}
 

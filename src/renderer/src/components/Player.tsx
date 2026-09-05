@@ -1,20 +1,23 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { MODEL_EXTENDED, type Song, type StemId } from '../../../shared/types'
+import { MODEL_EXTENDED, type AppSettings, type Song, type StemId } from '../../../shared/types'
 import { usePlayer, clearBufferCache } from '../lib/PlayerContext'
 import { buildStemMeta, STEM_INFO, PREFERRED_ORDER } from '../lib/stems'
 import { fmtTime } from '../lib/format'
+import { Thumb } from '../lib/thumbs'
 import { StemLane } from './StemLane'
 import { Transport } from './Transport'
-import { DownloadIcon, RefreshIcon, XIcon } from './Icons'
+import { DownloadIcon, ExternalIcon, RefreshIcon, XIcon } from './Icons'
 
 export { clearBufferCache }
 
 interface Props {
   song: Song
+  settings?: AppSettings
   onReprocess?: (videoId: string, model: string, stems: string[]) => void
 }
 
-export function Player({ song, onReprocess }: Props): React.ReactElement {
+export function Player({ song, settings, onReprocess }: Props): React.ReactElement {
+  void settings
   const {
     playing,
     duration,
@@ -46,6 +49,7 @@ export function Player({ song, onReprocess }: Props): React.ReactElement {
 
   const stemMeta = useMemo(() => buildStemMeta(Object.keys(buffers) as StemId[]), [buffers])
 
+  const youtubeUrl = `https://www.youtube.com/watch?v=${song.videoId}`
   const addedLabel = new Date(song.addedAt).toLocaleDateString(undefined, {
     month: 'short',
     day: 'numeric',
@@ -103,11 +107,9 @@ export function Player({ song, onReprocess }: Props): React.ReactElement {
         <div className="max-w-5xl mx-auto space-y-4">
           <div className="glass rounded-2xl p-6 rise-in flex flex-col md:flex-row gap-6 items-start md:items-center justify-between">
             <div className="flex items-center gap-5 min-w-0 flex-1">
-              <img
-                src={`https://i.ytimg.com/vi/${song.videoId}/mqdefault.jpg`}
-                alt=""
+              <Thumb
+                videoId={song.videoId}
                 className="w-36 h-24 rounded-xl object-cover bg-white/5 shadow-md shrink-0 ring-1 ring-white/10"
-                draggable={false}
               />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 mb-1 flex-wrap">
@@ -121,6 +123,7 @@ export function Player({ song, onReprocess }: Props): React.ReactElement {
                 <h2 className="text-2xl font-bold leading-snug truncate text-white">{song.title}</h2>
                 <p className="text-xs text-white/45 mt-1 font-mono truncate">
                   {fmtTime(duration || song.duration)} · added {addedLabel}
+                  {song.took ? ` · split in ${fmtTime(song.took)}` : ''}
                 </p>
                 <div className="flex items-center gap-x-5 gap-y-1.5 flex-wrap mt-3">
                   {stemMeta.map((meta) => (
@@ -136,7 +139,7 @@ export function Player({ song, onReprocess }: Props): React.ReactElement {
             <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
               <button
                 onClick={() => setShowReprocess(true)}
-                className="no-drag glass rounded-xl px-4 py-2.5 text-[13px] font-medium text-olive-200 hover:text-white hover:bg-olive-500/20 border border-olive-400/30 transition-all flex items-center gap-2"
+                className="no-drag glass rounded-xl px-4 py-2.5 text-[13px] font-medium text-olive-200 hover:text-white hover:bg-olive-500/20 border border-olive-400/30 transition-all flex items-center gap-2 cursor-pointer"
                 title="Reprocess this track with SOTA BS-RoFormer or new stems"
               >
                 <RefreshIcon className="w-3.5 h-3.5" />
@@ -145,10 +148,18 @@ export function Player({ song, onReprocess }: Props): React.ReactElement {
               <button
                 onClick={exportAllStems}
                 disabled={decoding || !!decodeError}
-                className="no-drag glass rounded-xl px-4 py-2.5 text-[13px] font-medium text-white/70 hover:text-white hover:bg-white/10 transition-colors flex items-center gap-2 disabled:opacity-40"
+                className="no-drag glass rounded-xl px-4 py-2.5 text-[13px] font-medium text-white/70 hover:text-white hover:bg-white/10 transition-colors flex items-center gap-2 disabled:opacity-40 cursor-pointer"
               >
                 <DownloadIcon className="w-4 h-4" />
                 Export everything
+              </button>
+              <button
+                onClick={() => window.stemkit.openExternal(youtubeUrl)}
+                className="no-drag glass rounded-xl px-4 py-2.5 text-[13px] font-medium text-white/70 hover:text-white hover:bg-white/10 transition-colors flex items-center gap-2 cursor-pointer"
+                title="Open original video on YouTube"
+              >
+                <ExternalIcon className="w-3.5 h-3.5" />
+                YouTube
               </button>
             </div>
           </div>
@@ -172,7 +183,15 @@ export function Player({ song, onReprocess }: Props): React.ReactElement {
           />
 
           <div className="mt-4 space-y-2">
-            {stemMeta.map((meta) => (
+            {decoding
+              ? [...Array(4)].map((_, i) => (
+                  <div
+                    key={i}
+                    className="glass rounded-xl h-16 animate-pulse"
+                    style={{ animationDelay: `${i * 120}ms` }}
+                  />
+                ))
+              : stemMeta.map((meta) => (
               <StemLane
                 key={meta.id}
                 meta={meta}
