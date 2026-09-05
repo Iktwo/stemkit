@@ -32,6 +32,7 @@ export function getPresetMutesAndSolos(p: PresetId | 'custom'): {
   return { mutes, solos }
 }
 
+const MAX_BUFFER_CACHE = 2
 const bufferCache = new Map<string, Promise<BufferMap>>()
 
 export function clearBufferCache(videoId?: string): void {
@@ -42,12 +43,19 @@ export function clearBufferCache(videoId?: string): void {
   }
 }
 
-export function getDecoded(videoId: string): Promise<BufferMap> {
+export function getDecoded(videoId: string, isCancelled?: () => boolean): Promise<BufferMap> {
   let entry = bufferCache.get(videoId)
   if (!entry) {
+    if (bufferCache.size >= MAX_BUFFER_CACHE) {
+      const oldestKey = bufferCache.keys().next().value
+      if (oldestKey) bufferCache.delete(oldestKey)
+    }
     entry = window.stemkit
       .getBuffers(videoId)
-      .then((payload) => decodePayload(payload))
+      .then((payload) => {
+        if (isCancelled && isCancelled()) throw new Error('cancelled')
+        return decodePayload(payload, isCancelled)
+      })
       .catch((err) => {
         bufferCache.delete(videoId)
         throw err
@@ -101,6 +109,21 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
   const loadTokenRef = useRef(0)
   const presetRef = useRef<PresetId | 'custom'>('all')
 
+  const currentSongRef = useRef<Song | null>(null)
+  currentSongRef.current = currentSong
+
+  const buffersRef = useRef<BufferMap>({})
+  buffersRef.current = buffers
+
+  const masterRef = useRef(0.9)
+  masterRef.current = master
+
+  const mutesRef = useRef<Set<StemId>>(new Set())
+  mutesRef.current = mutes
+
+  const solosRef = useRef<Set<StemId>>(new Set())
+  solosRef.current = solos
+
   const getPosition = useCallback((): number => {
     if (playingRef.current) return engine.expected()
     return posRef.current
@@ -138,6 +161,9 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
       engine.setPlaying(false, posRef.current)
     }
   }, [])
+
+  const togglePlayRef = useRef(togglePlay)
+  togglePlayRef.current = togglePlay
 
   const seekTo = useCallback((t: number): void => {
     posRef.current = t
@@ -203,9 +229,9 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
   const loadSong = useCallback(
     async (song: Song, autoPlay = false): Promise<void> => {
       // If the song is already loaded, don't reset or stop!
-      if (currentSong?.videoId === song.videoId && Object.keys(buffers).length > 0) {
+      if (currentSongRef.current?.videoId === song.videoId && Object.keys(buffersRef.current).length > 0) {
         if (autoPlay && !playingRef.current) {
-          togglePlay()
+          togglePlayRef.current()
         }
         return
       }
@@ -232,7 +258,7 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
       }
 
       try {
-        const decoded = await getDecoded(song.videoId)
+        const decoded = await getDecoded(song.videoId, () => loadTokenRef.current !== token)
         if (loadTokenRef.current !== token) return
         setBuffers(decoded)
         engine.setBuffers(decoded)
@@ -248,9 +274,9 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
           const { mutes: activeMutes, solos: activeSolos } = getPresetMutesAndSolos(activePreset)
           setMutes(activeMutes)
           setSolos(activeSolos)
-          engine.applyMix(newVols, activeMutes, activeSolos, master)
+          engine.applyMix(newVols, activeMutes, activeSolos, masterRef.current)
         } else {
-          engine.applyMix(newVols, mutes, solos, master)
+          engine.applyMix(newVols, mutesRef.current, solosRef.current, masterRef.current)
         }
 
         if (autoPlay && !playingRef.current) {
@@ -261,10 +287,13 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
       } catch (err) {
         if (loadTokenRef.current !== token) return
         setDecoding(false)
-        setDecodeError(err instanceof Error ? err.message : String(err))
+        const msg = err instanceof Error ? err.message : String(err)
+        if (msg !== 'cancelled') {
+          setDecodeError(msg)
+        }
       }
     },
-    [currentSong?.videoId, buffers, togglePlay, master, mutes, solos]
+    []
   )
 
   const value: PlayerContextValue = {

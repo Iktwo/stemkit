@@ -207,6 +207,7 @@ export function Player({ song, settings, onReprocess }: Props): React.ReactEleme
                 onVolume={(v) => setStemVolume(meta.id, v)}
                 onSeek={seekTo}
                 onExport={() => exportStem(meta.id)}
+                playing={playing}
               />
             ))}
           </div>

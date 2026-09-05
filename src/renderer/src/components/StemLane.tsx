@@ -9,17 +9,22 @@ export interface StemMeta {
   icon: React.ReactNode
 }
 
-const BUCKETS = 1600
+const BUCKETS = 1200
+const peaksCache = new WeakMap<AudioBuffer, Float32Array>()
 
 function computePeaks(buffer: AudioBuffer): Float32Array {
+  const cached = peaksCache.get(buffer)
+  if (cached) return cached
+
   const out = new Float32Array(BUCKETS)
   const data = buffer.getChannelData(0)
   const size = Math.floor(data.length / BUCKETS)
+  const step = Math.max(1, Math.floor(size / 32))
   for (let b = 0; b < BUCKETS; b++) {
     let max = 0
     const start = b * size
     const end = start + size
-    for (let i = start; i < end; i += 4) {
+    for (let i = start; i < end; i += step) {
       const v = Math.abs(data[i])
       if (v > max) max = v
     }
@@ -27,6 +32,7 @@ function computePeaks(buffer: AudioBuffer): Float32Array {
   }
   const globalMax = out.reduce((m, v) => Math.max(m, v), 0.0001)
   for (let b = 0; b < BUCKETS; b++) out[b] = Math.min(1, out[b] / globalMax)
+  peaksCache.set(buffer, out)
   return out
 }
 
@@ -44,6 +50,7 @@ interface Props {
   onVolume: (v: number) => void
   onSeek: (seconds: number) => void
   onExport?: () => void
+  playing?: boolean
 }
 
 export function StemLane({
@@ -59,7 +66,8 @@ export function StemLane({
   onToggleSolo,
   onVolume,
   onSeek,
-  onExport
+  onExport,
+  playing = false
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const peaks = useMemo(() => (buffer ? computePeaks(buffer) : null), [buffer])
@@ -102,12 +110,16 @@ export function StemLane({
           ctx.fillRect(px - 0.75, 0, 1.5, h)
         }
       }
-      raf = requestAnimationFrame(draw)
+      if (playing) {
+        raf = requestAnimationFrame(draw)
+      }
     }
 
-    raf = requestAnimationFrame(draw)
-    return () => cancelAnimationFrame(raf)
-  }, [peaks, duration, getPosition, meta.color])
+    draw()
+    return () => {
+      if (raf) cancelAnimationFrame(raf)
+    }
+  }, [peaks, duration, getPosition, meta.color, playing])
 
   const handleSeek = (e: React.MouseEvent<HTMLCanvasElement>): void => {
     if (!peaks || duration <= 0) return

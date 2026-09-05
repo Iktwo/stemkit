@@ -3,20 +3,28 @@ import type { StemId } from '../../../shared/types'
 export type BufferMap = Partial<Record<StemId, AudioBuffer>>
 
 export async function decodePayload(
-  payload: Record<string, Uint8Array>
+  payload: Record<string, Uint8Array>,
+  isCancelled?: () => boolean
 ): Promise<BufferMap> {
-  const ctx = new AudioContext()
-  void ctx.resume()
-  const ids = Object.keys(payload)
-  // decodeAudioData detaches the source buffer — the IPC payload is throwaway,
-  // so hand it over as-is (skips a full copy per stem)
-  const decoded = await Promise.all(
-    ids.map((id) => ctx.decodeAudioData(payload[id].buffer as ArrayBuffer))
-  )
+  const ctx = engine.ensureCtx()
+  if (ctx.state === 'suspended') {
+    void ctx.resume()
+  }
+  const ids = Object.keys(payload) as StemId[]
   const out: BufferMap = {}
-  ids.forEach((id, i) => {
-    out[id as StemId] = decoded[i]
-  })
+
+  for (const id of ids) {
+    if (isCancelled && isCancelled()) break
+    const raw = payload[id]
+    if (!raw || raw.byteLength === 0) continue
+    const ab = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer
+    try {
+      out[id] = await ctx.decodeAudioData(ab)
+    } catch (err) {
+      console.error(`Failed to decode stem ${id}:`, err)
+    }
+  }
+
   return out
 }
 
@@ -31,8 +39,8 @@ export class StemEngine {
   private anchorCtx = 0
   rate = 1
 
-  private ensureCtx(): AudioContext {
-    if (!this.ctx) {
+  ensureCtx(): AudioContext {
+    if (!this.ctx || this.ctx.state === 'closed') {
       this.ctx = new AudioContext()
       this.master = this.ctx.createGain()
       this.master.gain.value = 0.9
