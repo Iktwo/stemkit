@@ -108,6 +108,9 @@ export function StemLane({
           const px = frac * w
           ctx.fillStyle = 'rgba(255,255,255,0.85)'
           ctx.fillRect(px - 0.75, 0, 1.5, h)
+        } else {
+          ctx.fillStyle = 'rgba(255,255,255,0.06)'
+          ctx.fillRect(0, (h - 2) / 2, w, 2)
         }
       }
       if (playing) {

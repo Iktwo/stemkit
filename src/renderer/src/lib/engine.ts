@@ -2,6 +2,103 @@ import type { StemId } from '../../../shared/types'
 
 export type BufferMap = Partial<Record<StemId, AudioBuffer>>
 
+/**
+ * Fast-path direct WAV PCM / IEEE-float decoder.
+ * Bypasses Web Audio decodeAudioData worker thread IPC, format detection, and detachment,
+ * allowing instant synchronous/microtask population of AudioBuffers.
+ */
+function decodeWavFast(raw: Uint8Array, ctx: AudioContext): AudioBuffer | null {
+  if (raw.byteLength < 44) return null
+  const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength)
+  // 'RIFF' = 0x52494646, 'WAVE' = 0x57415645
+  if (view.getUint32(0, false) !== 0x52494646 || view.getUint32(8, false) !== 0x57415645) {
+    return null
+  }
+
+  let offset = 12
+  let fmt: { format: number; channels: number; sampleRate: number; bitsPerSample: number } | null = null
+  let dataOffset = 0
+  let dataLength = 0
+
+  while (offset + 8 <= raw.byteLength) {
+    const chunkId = view.getUint32(offset, false)
+    const chunkSize = view.getUint32(offset + 4, true)
+    offset += 8
+
+    if (chunkId === 0x666d7420) {
+      // 'fmt '
+      fmt = {
+        format: view.getUint16(offset, true),
+        channels: view.getUint16(offset + 2, true),
+        sampleRate: view.getUint32(offset + 4, true),
+        bitsPerSample: view.getUint16(offset + 14, true)
+      }
+    } else if (chunkId === 0x64617461) {
+      // 'data'
+      dataOffset = offset
+      dataLength = chunkSize
+      break
+    }
+    offset += chunkSize
+  }
+
+  if (!fmt || !dataOffset || dataOffset + dataLength > raw.byteLength) return null
+
+  const channels = fmt.channels
+  const sampleRate = fmt.sampleRate
+
+  // Case 1: 32-bit float stereo (standard BS-RoFormer output)
+  if (fmt.format === 3 && fmt.bitsPerSample === 32 && channels === 2) {
+    const numFrames = Math.floor(dataLength / 8)
+    const floatView = new Float32Array(raw.buffer, raw.byteOffset + dataOffset, numFrames * 2)
+    const audioBuf = ctx.createBuffer(2, numFrames, sampleRate)
+    const left = audioBuf.getChannelData(0)
+    const right = audioBuf.getChannelData(1)
+    for (let i = 0, j = 0; i < numFrames; i++, j += 2) {
+      left[i] = floatView[j]
+      right[i] = floatView[j + 1]
+    }
+    return audioBuf
+  }
+
+  // Case 2: 32-bit float mono
+  if (fmt.format === 3 && fmt.bitsPerSample === 32 && channels === 1) {
+    const numFrames = Math.floor(dataLength / 4)
+    const floatView = new Float32Array(raw.buffer, raw.byteOffset + dataOffset, numFrames)
+    const audioBuf = ctx.createBuffer(1, numFrames, sampleRate)
+    audioBuf.getChannelData(0).set(floatView)
+    return audioBuf
+  }
+
+  // Case 3: 16-bit PCM stereo
+  if (fmt.format === 1 && fmt.bitsPerSample === 16 && channels === 2) {
+    const numFrames = Math.floor(dataLength / 4)
+    const intView = new Int16Array(raw.buffer, raw.byteOffset + dataOffset, numFrames * 2)
+    const audioBuf = ctx.createBuffer(2, numFrames, sampleRate)
+    const left = audioBuf.getChannelData(0)
+    const right = audioBuf.getChannelData(1)
+    for (let i = 0, j = 0; i < numFrames; i++, j += 2) {
+      left[i] = intView[j] / 32768.0
+      right[i] = intView[j + 1] / 32768.0
+    }
+    return audioBuf
+  }
+
+  // Case 4: 16-bit PCM mono
+  if (fmt.format === 1 && fmt.bitsPerSample === 16 && channels === 1) {
+    const numFrames = Math.floor(dataLength / 2)
+    const intView = new Int16Array(raw.buffer, raw.byteOffset + dataOffset, numFrames)
+    const audioBuf = ctx.createBuffer(1, numFrames, sampleRate)
+    const ch = audioBuf.getChannelData(0)
+    for (let i = 0; i < numFrames; i++) {
+      ch[i] = intView[i] / 32768.0
+    }
+    return audioBuf
+  }
+
+  return null
+}
+
 export async function decodePayload(
   payload: Record<string, Uint8Array>,
   isCancelled?: () => boolean
@@ -13,17 +110,35 @@ export async function decodePayload(
   const ids = Object.keys(payload) as StemId[]
   const out: BufferMap = {}
 
-  for (const id of ids) {
-    if (isCancelled && isCancelled()) break
-    const raw = payload[id]
-    if (!raw || raw.byteLength === 0) continue
-    const ab = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer
-    try {
-      out[id] = await ctx.decodeAudioData(ab)
-    } catch (err) {
-      console.error(`Failed to decode stem ${id}:`, err)
-    }
-  }
+  // Decode all stems concurrently
+  await Promise.all(
+    ids.map(async (id) => {
+      if (isCancelled && isCancelled()) return
+      const raw = payload[id]
+      if (!raw || raw.byteLength === 0) return
+
+      // Fast path: direct WAV PCM / IEEE-float parsing (~20ms per stem)
+      try {
+        const direct = decodeWavFast(raw, ctx)
+        if (direct) {
+          out[id] = direct
+          return
+        }
+      } catch (err) {
+        console.warn(`Fast WAV decode failed for ${id}, using fallback:`, err)
+      }
+
+      if (isCancelled && isCancelled()) return
+
+      // Fallback path: standard Web Audio decodeAudioData
+      const ab = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer
+      try {
+        out[id] = await ctx.decodeAudioData(ab)
+      } catch (err) {
+        console.error(`Failed to decode stem ${id}:`, err)
+      }
+    })
+  )
 
   return out
 }

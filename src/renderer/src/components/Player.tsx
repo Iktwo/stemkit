@@ -47,7 +47,22 @@ export function Player({ song, settings, onReprocess }: Props): React.ReactEleme
     new Set<StemId>((song.stems as StemId[]) || (PREFERRED_ORDER as StemId[]))
   )
 
-  const stemMeta = useMemo(() => buildStemMeta(Object.keys(buffers) as StemId[]), [buffers])
+  // Reset reprocess state when switching songs
+  useEffect(() => {
+    setShowReprocess(false)
+    setReprocessStems(new Set<StemId>((song.stems as StemId[]) || (PREFERRED_ORDER as StemId[])))
+  }, [song.videoId, song.stems])
+
+  // Keep all lanes rendered even before buffers finish loading to prevent layout shifts & flash
+  const stemIds = useMemo(() => {
+    const fromBuffers = Object.keys(buffers) as StemId[]
+    if (fromBuffers.length > 0) return fromBuffers
+    return song.stems && song.stems.length > 0
+      ? (song.stems as StemId[])
+      : (PREFERRED_ORDER as StemId[])
+  }, [buffers, song.stems])
+
+  const stemMeta = useMemo(() => buildStemMeta(stemIds), [stemIds])
 
   const youtubeUrl = `https://www.youtube.com/watch?v=${song.videoId}`
   const addedLabel = new Date(song.addedAt).toLocaleDateString(undefined, {

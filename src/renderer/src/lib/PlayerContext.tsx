@@ -32,35 +32,53 @@ export function getPresetMutesAndSolos(p: PresetId | 'custom'): {
   return { mutes, solos }
 }
 
-const MAX_BUFFER_CACHE = 2
-const bufferCache = new Map<string, Promise<BufferMap>>()
+const MAX_BUFFER_CACHE = 4
+const bufferCache = new Map<string, BufferMap>()
+const inFlightDecodes = new Map<string, Promise<BufferMap>>()
 
 export function clearBufferCache(videoId?: string): void {
   if (videoId) {
     bufferCache.delete(videoId)
+    inFlightDecodes.delete(videoId)
   } else {
     bufferCache.clear()
+    inFlightDecodes.clear()
   }
 }
 
 export function getDecoded(videoId: string, isCancelled?: () => boolean): Promise<BufferMap> {
-  let entry = bufferCache.get(videoId)
+  const cached = bufferCache.get(videoId)
+  if (cached && Object.keys(cached).length > 0) {
+    // Refresh LRU order
+    bufferCache.delete(videoId)
+    bufferCache.set(videoId, cached)
+    return Promise.resolve(cached)
+  }
+
+  let entry = inFlightDecodes.get(videoId)
   if (!entry) {
-    if (bufferCache.size >= MAX_BUFFER_CACHE) {
-      const oldestKey = bufferCache.keys().next().value
-      if (oldestKey) bufferCache.delete(oldestKey)
-    }
     entry = window.stemkit
       .getBuffers(videoId)
       .then((payload) => {
         if (isCancelled && isCancelled()) throw new Error('cancelled')
         return decodePayload(payload, isCancelled)
       })
+      .then((decoded) => {
+        inFlightDecodes.delete(videoId)
+        if (Object.keys(decoded).length > 0) {
+          if (bufferCache.size >= MAX_BUFFER_CACHE) {
+            const oldestKey = bufferCache.keys().next().value
+            if (oldestKey) bufferCache.delete(oldestKey)
+          }
+          bufferCache.set(videoId, decoded)
+        }
+        return decoded
+      })
       .catch((err) => {
-        bufferCache.delete(videoId)
+        inFlightDecodes.delete(videoId)
         throw err
       })
-    bufferCache.set(videoId, entry)
+    inFlightDecodes.set(videoId, entry)
   }
   return entry
 }
@@ -241,6 +259,40 @@ export function PlayerProvider({ children }: { children: ReactNode }): ReactElem
       playingRef.current = false
       setPlaying(false)
       posRef.current = 0
+
+      // Fast-path: if song is already cached in memory, switch immediately without flashing!
+      const cached = bufferCache.get(song.videoId)
+      if (cached && Object.keys(cached).length > 0) {
+        bufferCache.delete(song.videoId)
+        bufferCache.set(song.videoId, cached)
+
+        setCurrentSong(song)
+        setBuffers(cached)
+        engine.setBuffers(cached)
+        const newVols = Object.fromEntries(Object.keys(cached).map((id) => [id, 1]))
+        setVols(newVols)
+        const d = engine.trackDuration() || song.duration || 0
+        setDuration(d)
+        setDecodeError(null)
+        setDecoding(false)
+
+        const activePreset = presetRef.current
+        if (activePreset !== 'custom') {
+          const { mutes: activeMutes, solos: activeSolos } = getPresetMutesAndSolos(activePreset)
+          setMutes(activeMutes)
+          setSolos(activeSolos)
+          engine.applyMix(newVols, activeMutes, activeSolos, masterRef.current)
+        } else {
+          engine.applyMix(newVols, mutesRef.current, solosRef.current, masterRef.current)
+        }
+
+        if (autoPlay && !playingRef.current) {
+          playingRef.current = true
+          setPlaying(true)
+          engine.setPlaying(true, 0)
+        }
+        return
+      }
 
       setCurrentSong(song)
       setDuration(song.duration || 0)

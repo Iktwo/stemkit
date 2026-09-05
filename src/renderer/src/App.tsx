@@ -261,7 +261,6 @@ function MainApp(): React.ReactElement {
   } else if (activeSong) {
     main = (
       <Player
-        key={activeSong.videoId}
         song={activeSong}
         settings={settings ?? undefined}
         onReprocess={handleReprocess}
