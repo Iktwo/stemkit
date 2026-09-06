@@ -11,6 +11,7 @@ import {
   tabScript,
   ensureGpuEngine,
   ensureTabEngineDeps,
+  ensureMt3EngineDeps,
   getStatus,
   ytDlpRuntimeArgs
 } from './env'
@@ -696,6 +697,12 @@ function runTabEngine(
     if (!(await ensureTabEngineDeps())) {
       throw new Error('The tablature engine could not be installed. Check your connection and try again.')
     }
+    if (args.includes('mt3') && args.includes('--engine')) {
+      sendTabProgress(videoId, 1, 'Checking MR-MT3 Transformer packages…', instrument)
+      if (!(await ensureMt3EngineDeps())) {
+        throw new Error('The MR-MT3 Transformer packages could not be installed. Check your connection and try again.')
+      }
+    }
     return new Promise<GuitarTabData>((resolve, reject) => {
       sendTabProgress(videoId, 3, startMessage, instrument)
       const child = spawn(venvPython(), [tabScript(), ...args, '--device', tabDeviceArg()], {
@@ -781,6 +788,7 @@ export async function transcribeGuitarTab(videoId: string, opts: TabTranscribeOp
       ...(existsSync(mix) ? ['--mix', mix] : []),
       ...optionalArgs([
         ['--mode', instrument === 'bass' ? 'lead' : opts.mode],
+        ['--engine', opts.engine],
         ['--voicing', opts.voicing],
         ['--tuning', opts.tuning],
         ['--position', opts.position],

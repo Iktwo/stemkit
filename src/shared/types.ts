@@ -162,6 +162,7 @@ export interface GuitarTabData {
   // human readable description of what produced the notes
   engine?: string
   model?: string
+  modelEngine?: TabEngine
   source?: 'audio' | 'midi'
   bpm: number
   mode?: TabMode
@@ -187,6 +188,8 @@ export interface GuitarTabData {
   asciiTab: string
 }
 
+export type TabEngine = 'basic_pitch' | 'mt3'
+
 export interface TabProgress {
   videoId: string
   instrument?: TabInstrument
@@ -196,6 +199,7 @@ export interface TabProgress {
 
 export interface TabTranscribeOptions {
   instrument: TabInstrument
+  engine?: TabEngine
   mode?: TabMode
   voicing?: TabVoicing
   tuning?: string

@@ -5,6 +5,7 @@ import {
   type MidiFileInfo,
   type Song,
   type TabInstrument,
+  type TabEngine,
   type TabMode,
   type TabNote,
   type TabProgress,
@@ -322,6 +323,7 @@ export function TabStage({ song, instrument = 'guitar', onClose }: Props): React
   const [copied, setCopied] = useState(false)
 
   const [mode, setMode] = useState<EngineMode>(isBass ? 'lead' : 'poly')
+  const [modelEngine, setModelEngine] = useState<TabEngine>('basic_pitch')
   const [voicing, setVoicing] = useState<TabVoicing>('standard')
   const [tuning, setTuning] = useState('standard')
   const [position, setPosition] = useState('auto')
@@ -438,6 +440,9 @@ export function TabStage({ song, instrument = 'guitar', onClose }: Props): React
       if (data.positionAnchor) setPosition(data.positionAnchor)
       if (data.sensitivity) setSensitivity(data.sensitivity)
       if (data.beatsPerBar) setBeatsPerBar(data.beatsPerBar)
+      if (data.modelEngine === 'mt3' || data.modelEngine === 'basic_pitch') {
+        setModelEngine(data.modelEngine)
+      }
     },
     []
   )
@@ -498,6 +503,7 @@ export function TabStage({ song, instrument = 'guitar', onClose }: Props): React
     void run('analyze', () =>
       window.stemkit.transcribeTabs(song.videoId, {
         instrument,
+        engine: modelEngine,
         mode: isBass ? 'lead' : mode,
         voicing,
         tuning,
@@ -846,11 +852,27 @@ export function TabStage({ song, instrument = 'guitar', onClose }: Props): React
           </div>
           {!isBass && (
             <Select
-              label="Engine"
+              label="Transcription mode"
               value={mode}
               onChange={(v) => setMode(v as EngineMode)}
               options={GUITAR_MODES}
               hint={GUITAR_MODES.find((m) => m.id === mode)?.desc}
+            />
+          )}
+          {!isBass && mode === 'poly' && (
+            <Select
+              label="Neural model"
+              value={modelEngine}
+              onChange={(v) => setModelEngine(v as TabEngine)}
+              options={[
+                { id: 'basic_pitch', label: 'Basic Pitch (Fast, ONNX)' },
+                { id: 'mt3', label: 'MR-MT3 Transformer (Accurate)' }
+              ]}
+              hint={
+                modelEngine === 'mt3'
+                  ? 'Multi-instrument autoregressive transformer that suppresses harmonic overtones.'
+                  : 'Lightweight Spotify model running locally on ONNX.'
+              }
             />
           )}
           {!isBass && mode === 'chord' && (

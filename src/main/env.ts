@@ -295,6 +295,31 @@ export async function ensureTabEngineDeps(): Promise<boolean> {
   }
 }
 
+let mt3DepsReady = false
+
+export async function ensureMt3EngineDeps(): Promise<boolean> {
+  if (mt3DepsReady) return true
+  try {
+    await runCapture(venvPython(), ['-c', 'import mt3_infer'], 30000)
+    mt3DepsReady = true
+    return true
+  } catch {}
+  sendEnvEvent('Preparing the MR-MT3 Transformer packages (one-time download)…')
+  try {
+    await pipInstall(['mt3-infer'])
+    await runCapture(venvPython(), ['-c', 'import mt3_infer'], 30000)
+    mt3DepsReady = true
+    sendEnvEvent('MR-MT3 Transformer engine ready', 'success')
+    return true
+  } catch (err) {
+    sendEnvEvent(
+      `MR-MT3 Transformer setup failed: ${err instanceof Error ? err.message : String(err)}`,
+      'error'
+    )
+    return false
+  }
+}
+
 function cleanVersion(version: string): string {
   return String(version).replace(/^v/, '')
 }

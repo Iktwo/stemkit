@@ -109,6 +109,35 @@ def load_mono(path, target_sr=None):
     return np.ascontiguousarray(y, dtype=np.float32), sr
 
 
+def bandpass_filter(y, sr, lowcut, highcut, order=2):
+    """Zero-phase Butterworth bandpass filter to isolate instrument register."""
+    try:
+        import scipy.signal
+        import numpy as np
+        nyq = 0.5 * sr
+        low = max(1e-4, lowcut / nyq)
+        high = min(0.9999, highcut / nyq)
+        if low >= high:
+            return y
+        sos = scipy.signal.butter(order, [low, high], btype="band", output="sos")
+        return scipy.signal.sosfiltfilt(sos, y).astype(np.float32)
+    except Exception:
+        return y
+
+
+def highpass_filter(y, sr, cutoff, order=2):
+    """Zero-phase Butterworth highpass filter to eliminate sub-bass rumble."""
+    try:
+        import scipy.signal
+        import numpy as np
+        nyq = 0.5 * sr
+        cut = max(1e-4, min(0.9999, cutoff / nyq))
+        sos = scipy.signal.butter(order, cut, btype="high", output="sos")
+        return scipy.signal.sosfiltfilt(sos, y).astype(np.float32)
+    except Exception:
+        return y
+
+
 def pick_torch_device(requested):
     try:
         import torch
@@ -298,7 +327,7 @@ def track_f0(y, sr, fmin, fmax, hop_s, device, octave_up=False):
         # the full model is ~20x slower than tiny and barely more accurate on
         # clean stems; only worth it when a CUDA GPU makes it free
         model = os.environ.get("STEMKIT_CREPE_MODEL") or ("full" if dev == "cuda" else "tiny")
-        audio = torch.from_numpy(y).unsqueeze(0)
+        audio = torch.from_numpy(y.astype(np.float32)).unsqueeze(0)
 
         def run(dev_name):
             return torchcrepe.predict(
@@ -618,6 +647,50 @@ def transcribe_lead(y, sr, instrument, sensitivity, device, progress_base=10):
 # polyphonic transcription (Basic Pitch) + refinement
 # ---------------------------------------------------------------------------
 
+def filter_unplucked_ghosts(notes, y, sr, sensitivity="clean"):
+    """
+    Filter candidate polyphonic notes that begin when there is no physical pluck
+    attack or spectral flux onset peak. Physical guitar plucks always produce an
+    acoustic onset transient; sustained overtones and separation artifacts do not.
+    """
+    if not notes or len(y) == 0:
+        return notes
+    import numpy as np
+
+    hop = 512
+    onset_frames, _, _ = detect_onsets(y, sr, hop, sensitivity)
+    if len(onset_frames) == 0:
+        return notes
+    onset_times = onset_frames * (hop / sr)
+
+    strum_tol = 0.04
+    filtered = []
+    clusters = []
+    curr = [notes[0]]
+    for n in notes[1:]:
+        if n["start"] - curr[0]["start"] <= strum_tol:
+            curr.append(n)
+        else:
+            clusters.append(curr)
+            curr = [n]
+    clusters.append(curr)
+
+    for cl in clusters:
+        cl_start = cl[0]["start"]
+        diffs = np.abs(onset_times - cl_start)
+        min_diff = np.min(diffs) if len(diffs) else 1.0
+
+        if min_diff <= 0.055:
+            filtered.extend(cl)
+        else:
+            for n in cl:
+                if n.get("amplitude", 0.5) >= 0.52 and (n["end"] - n["start"]) >= 0.10:
+                    filtered.append(n)
+
+    filtered.sort(key=lambda x: (x["start"], x["pitch"]))
+    return filtered
+
+
 def transcribe_poly(path, y, sr, sensitivity, device, lowest_pitch, highest_pitch, progress_base=10):
     try:
         from basic_pitch.inference import predict
@@ -704,10 +777,69 @@ def transcribe_poly(path, y, sr, sensitivity, device, lowest_pitch, highest_pitc
     progress(progress_base + 45, "Filtering harmonic ghost notes…")
     notes = fix_octaves(notes, y, sr, lowest_pitch, highest_pitch)
     notes = filter_harmonics(notes)
+    notes = filter_unplucked_ghosts(notes, y, sr, sensitivity)
     notes = [n for n in notes if lowest_pitch <= n["pitch"] <= highest_pitch]
     notes = [n for n in notes if (n["end"] - n["start"] >= 0.055 or n.get("amplitude", 0.5) >= 0.42)]
     notes = cluster_strums(notes)
     return notes, "Basic Pitch (ONNX) + f0 anchoring"
+
+
+def transcribe_poly_mt3(path, y, sr, sensitivity, device, lowest_pitch, highest_pitch, progress_base=10):
+    """
+    Polyphonic transcription using Google MT3 family (MR-MT3 via mt3-infer).
+    Autoregressive transformer architecture models global musical context and
+    dramatically suppresses harmonic ghost notes.
+    """
+    import os
+    import warnings
+    import logging
+    os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+    warnings.filterwarnings("ignore")
+    logging.getLogger("transformers").setLevel(logging.ERROR)
+    try:
+        import mt3_infer
+        import pretty_midi
+        from mt3_infer.utils.audio import load_audio
+    except Exception as e:
+        fail(f"MT3 transformer engine is not available ({e}). Run in standard Basic Pitch mode or reinstall mt3-infer.")
+
+    progress(progress_base, "Loading audio into MR-MT3 Transformer…")
+    try:
+        audio_16k, sr_16k = load_audio(path)
+        progress(progress_base + 15, "Running MR-MT3 multi-instrument transformer…")
+        midi_obj = mt3_infer.transcribe(audio_16k, sr=sr_16k, model="mr_mt3")
+    except Exception as e:
+        fail(f"MR-MT3 transcription failed: {e}")
+
+    import tempfile
+    notes = []
+    with tempfile.NamedTemporaryFile(suffix=".mid", delete=True) as tmp:
+        midi_obj.save(tmp.name)
+        pm = pretty_midi.PrettyMIDI(tmp.name)
+        for inst in pm.instruments:
+            if inst.is_drum:
+                continue
+            for n in inst.notes:
+                p = int(n.pitch)
+                if lowest_pitch <= p <= highest_pitch and (n.end - n.start) >= 0.04:
+                    amp = round(min(1.0, max(0.2, n.velocity / 127.0)), 3)
+                    notes.append({
+                        "start": round(float(n.start), 3),
+                        "end": round(float(n.end), 3),
+                        "pitch": p,
+                        "amplitude": amp
+                    })
+
+    notes.sort(key=lambda x: (x["start"], x["pitch"]))
+
+    progress(progress_base + 45, "Filtering harmonic ghost notes…")
+    notes = fix_octaves(notes, y, sr, lowest_pitch, highest_pitch)
+    notes = filter_harmonics(notes)
+    notes = filter_unplucked_ghosts(notes, y, sr, sensitivity)
+    notes = [n for n in notes if lowest_pitch <= n["pitch"] <= highest_pitch]
+    notes = [n for n in notes if (n["end"] - n["start"] >= 0.05 or n.get("amplitude", 0.5) >= 0.4)]
+    notes = cluster_strums(notes)
+    return notes, "MR-MT3 Transformer"
 
 
 def cluster_strums(notes, max_strum_dur=0.045):
@@ -1454,6 +1586,7 @@ def main():
     parser.add_argument("--position", default="auto")
     parser.add_argument("--sensitivity", default="clean")
     parser.add_argument("--device", default="auto")
+    parser.add_argument("--engine", default="basic_pitch", choices=["basic_pitch", "mt3"], help="basic_pitch | mt3 (polyphonic model)")
     parser.add_argument("--beats-per-bar", type=int, default=4)
     parser.add_argument("--from-midi", default=None, help="Build the tab from this MIDI file instead of audio")
     parser.add_argument("--midi-track", default="all")
@@ -1486,6 +1619,7 @@ def main():
     highest = max(tuning_pitches) + max_fret
     forced_pos = POSITION_PRESETS.get(args.position.lower(), None)
     sensitivity = "sensitive" if args.sensitivity.lower() == "sensitive" else "clean"
+    model_engine = (args.engine or "basic_pitch").lower()
     mode = args.mode.lower()
     if is_bass:
         mode = "lead"
@@ -1578,7 +1712,10 @@ def main():
             if not chords and mix_chords:
                 chords = mix_chords
         else:
-            raw, engine = transcribe_poly(args.input, y, sr, sensitivity, args.device, lowest, highest, progress_base=12)
+            if model_engine == "mt3":
+                raw, engine = transcribe_poly_mt3(args.input, y, sr, sensitivity, args.device, lowest, highest, progress_base=12)
+            else:
+                raw, engine = transcribe_poly(args.input, y, sr, sensitivity, args.device, lowest, highest, progress_base=12)
             progress(72, f"Solving fingerings for {len(raw)} notes…")
             assigned = solve_fingering(raw, tuning_pitches, forced_pos, max_fret, is_bass)
             if not chords and mix_chords:
@@ -1614,6 +1751,7 @@ def main():
         "instrument": args.instrument,
         "engine": engine,
         "model": engine,
+        "modelEngine": model_engine,
         "source": source,
         "bpm": bpm,
         "mode": mode,
