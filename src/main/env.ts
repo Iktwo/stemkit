@@ -1,5 +1,5 @@
 import { spawn, execFile } from 'child_process'
-import { existsSync, writeFileSync, readdirSync, createWriteStream, mkdirSync, chmodSync, unlinkSync, statSync, renameSync } from 'fs'
+import { existsSync, writeFileSync, readFileSync, readdirSync, createWriteStream, mkdirSync, chmodSync, unlinkSync, statSync, renameSync, rmSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import { app, BrowserWindow, net } from 'electron'
@@ -420,7 +420,6 @@ function pyCandidates(): string[] {
     process.env.STEMKIT_PYTHON,
     '/opt/homebrew/bin/python3',
     '/usr/local/bin/python3',
-    '/usr/bin/python3',
     join(home, 'opt/anaconda3/bin/python3'),
     join(home, 'anaconda3/bin/python3'),
     join(home, 'miniconda3/bin/python3'),
@@ -483,7 +482,10 @@ export async function detectTools(): Promise<void> {
       const [version, machine] = out.trim().split(/\s+/)
       const minor = parseInt(version.split('.')[1], 10)
       const major = parseInt(version.split('.')[0], 10)
-      if (major > 3 || (major === 3 && minor >= 10 && minor <= 12)) {
+      if (major === 3 && minor >= 10 && minor <= 12) {
+        if (process.platform === 'darwin' && process.arch === 'arm64' && machine !== 'arm64') {
+          continue
+        }
         probes.push({ path: candidate, version, machine: machine ?? 'unknown' })
       }
     } catch {
@@ -499,6 +501,8 @@ export async function detectTools(): Promise<void> {
   const best = probes[0]
   if (best) {
     state.python = { found: true, path: best.path, version: best.version }
+  } else {
+    state.python = { found: false }
   }
 
   const bundled = bundledFfmpeg()
@@ -528,9 +532,51 @@ function sendEnvEvent(message: string, level: 'info' | 'error' | 'success' = 'in
 
 export async function refreshReady(): Promise<boolean> {
   const marker = join(venvDir(), '.ready')
-  state.ready =
-    existsSync(marker) && existsSync(venvPython()) && existsSync(venvYtDlp())
-  return state.ready
+  if (!existsSync(marker) || !existsSync(venvPython()) || !existsSync(venvYtDlp())) {
+    state.ready = false
+    return false
+  }
+
+  // Fast check: inspect pyvenv.cfg for incompatible python versions (e.g. legacy 3.9)
+  try {
+    const cfgPath = join(venvDir(), 'pyvenv.cfg')
+    if (existsSync(cfgPath)) {
+      const content = readFileSync(cfgPath, 'utf8')
+      const match = content.match(/version(?:_info)?\s*=\s*(\d+)\.(\d+)/i)
+      if (match) {
+        const major = parseInt(match[1], 10)
+        const minor = parseInt(match[2], 10)
+        if (major !== 3 || minor < 10) {
+          try { unlinkSync(marker) } catch {}
+          state.ready = false
+          return false
+        }
+      }
+    }
+  } catch {}
+
+  // Verify that the venv python actually runs, has supported version (>= 3.10),
+  // and has the required engine modules installed (bs_roformer)
+  try {
+    const out = await runCapture(
+      venvPython(),
+      ['-c', 'import sys, bs_roformer; print("%d.%d"%sys.version_info[:2])'],
+      6000
+    )
+    const [maj, min] = out.trim().split('.').map((x) => parseInt(x, 10))
+    if (maj !== 3 || min < 10) {
+      try { unlinkSync(marker) } catch {}
+      state.ready = false
+      return false
+    }
+  } catch {
+    try { unlinkSync(marker) } catch {}
+    state.ready = false
+    return false
+  }
+
+  state.ready = true
+  return true
 }
 
 function downloadTo(
@@ -922,7 +968,26 @@ export async function ensureRuntimePython(): Promise<boolean> {
 
 export async function bootstrap(): Promise<boolean> {
   if (state.bootstrapping) return false
-  if (!state.python.found || !state.python.path) {
+
+  let validPython = false
+  if (state.python.found && state.python.path && existsSync(state.python.path)) {
+    try {
+      const out = await runCapture(
+        state.python.path,
+        ['-c', 'import sys,platform;print("%d.%d %s"%(*sys.version_info[:2],platform.machine()))'],
+        5000
+      )
+      const [version, machine] = out.trim().split(/\s+/)
+      const [major, minor] = version.split('.').map((x) => parseInt(x, 10))
+      const archOk = !(process.platform === 'darwin' && process.arch === 'arm64' && machine !== 'arm64')
+      if (major === 3 && minor >= 10 && minor <= 12 && archOk) {
+        validPython = true
+      }
+    } catch {}
+  }
+
+  if (!validPython) {
+    state.python = { found: false }
     const ok = await ensureRuntimePython()
     if (!ok) {
       sendEnvEvent('No suitable python3 found on this machine', 'error')
@@ -941,6 +1006,11 @@ export async function bootstrap(): Promise<boolean> {
     const pip = venvPython()
 
     sendEnvEvent('Preparing workspace')
+    if (existsSync(venv)) {
+      try {
+        rmSync(venv, { recursive: true, force: true })
+      } catch {}
+    }
     await new Promise<void>((resolve, reject) => {
       const child = spawn(state.python.path as string, ['-m', 'venv', '--clear', venv])
       child.on('close', (code) =>
@@ -979,6 +1049,7 @@ export async function bootstrap(): Promise<boolean> {
         'soundfile'
       ])
       let buffer = ''
+      let stderrTail = ''
       child.stdout?.on('data', (chunk: Buffer) => {
         buffer += chunk.toString()
         const lines = buffer.split('\n')
@@ -998,12 +1069,16 @@ export async function bootstrap(): Promise<boolean> {
         }
       })
       child.stderr?.on('data', (chunk: Buffer) => {
-        const t = chunk.toString().trim()
-        if (t.startsWith('ERROR') || t.startsWith('error')) sendEnvEvent(t.slice(0, 200), 'error')
+        stderrTail = (stderrTail + chunk.toString()).slice(-1000)
       })
-      child.on('close', (code) =>
-        code === 0 ? resolve() : reject(new Error(`engine install failed (${code})`))
-      )
+      child.on('close', (code) => {
+        if (code === 0) {
+          resolve()
+        } else {
+          const lastErrLine = stderrTail.trim().split('\n').filter((l) => l.trim().length > 0).pop() ?? ''
+          reject(new Error(`engine install failed (${code})${lastErrLine ? `: ${lastErrLine.slice(0, 200)}` : ''}`))
+        }
+      })
       child.on('error', reject)
     })
 
@@ -1017,12 +1092,16 @@ export async function bootstrap(): Promise<boolean> {
         }
       })
       child.stderr?.on('data', (chunk: Buffer) => {
-        lastErr = chunk.toString().trim()
-        if (lastErr) sendEnvEvent(lastErr.slice(0, 200), 'error')
+        lastErr = (lastErr + chunk.toString()).slice(-1000)
       })
-      child.on('close', (code) =>
-        code === 0 ? resolve() : reject(new Error(`solver install failed (${code})${lastErr ? `: ${lastErr.slice(0, 200)}` : ''}`))
-      )
+      child.on('close', (code) => {
+        if (code === 0) {
+          resolve()
+        } else {
+          const lastErrLine = lastErr.trim().split('\n').filter((l) => l.trim().length > 0).pop() ?? ''
+          reject(new Error(`solver install failed (${code})${lastErrLine ? `: ${lastErrLine.slice(0, 200)}` : ''}`))
+        }
+      })
       child.on('error', reject)
     })
 
