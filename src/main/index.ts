@@ -41,7 +41,7 @@ import {
 } from './pipeline'
 import { initUpdater } from './updater'
 import { runSmoke } from './smoke'
-import { getThumb } from './thumbs'
+import { getThumb, clearThumbMemo } from './thumbs'
 
 let mainWindow: BrowserWindow | null = null
 let staticServer: Server | null = null
@@ -103,8 +103,10 @@ async function createWindow(): Promise<void> {
     minHeight: 680,
     show: false,
     backgroundColor: '#0b0b10',
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 18, y: 20 },
+    // hiddenInset traffic lights are macOS-only; default frame elsewhere
+    ...(process.platform === 'darwin'
+      ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 18, y: 20 } }
+      : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -229,7 +231,9 @@ app.whenReady().then(async () => {
   ipcMain.handle('app:version', () => app.getVersion())
   ipcMain.handle('settings:get', () => loadSettings())
   ipcMain.handle('settings:set', (_e, patch: Partial<AppSettings>) => {
-    return saveSettings(patch)
+    const next = saveSettings(patch)
+    clearThumbMemo()
+    return next
   })
   ipcMain.handle('thumb:get', (_e, videoId: string) => getThumb(videoId))
   // the renderer confirms optional-engine downloads explicitly; nothing

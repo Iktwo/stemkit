@@ -19,6 +19,8 @@ jobs:
             platform: mac
           - os: windows-latest
             platform: win
+          - os: ubuntu-22.04
+            platform: linux
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -38,8 +40,8 @@ jobs:
         if: steps.install.outcome == 'failure'
         run: npm install
 
-      - name: Fetch ffmpeg (mac)
-        if: matrix.platform == 'mac'
+      - name: Fetch ffmpeg (mac/linux)
+        if: matrix.platform == 'mac' || matrix.platform == 'linux'
         run: bash scripts/fetch-ffmpeg.sh
 
       - name: Fetch ffmpeg (win)
@@ -60,9 +62,30 @@ jobs:
           APPLE_TEAM_S: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           if [ -n "$P12_B64" ]; then
-            echo "CSC_LINK=$P12_B64" >> "$GITHUB_ENV"
-            echo "CSC_KEY_PASSWORD=$P12_PASS" >> "$GITHUB_ENV"
-            echo "Developer ID signing enabled"
+            # electron-builder 25.x imports the P12 into a temp keychain secured
+            # with a random password, but then calls set-key-partition-list with
+            # the P12 password. macOS 26.6+ runner images now validate that
+            # password, so the import always dies with SecKeychainUnlock
+            # (electron-userland/electron-builder#10101). Import the cert
+            # ourselves and hand electron-builder just the identity instead.
+            KC="$RUNNER_TEMP/sign.keychain-db"
+            KC_PASS=$(openssl rand -hex 32)
+            security create-keychain -p "$KC_PASS" "$KC"
+            security unlock-keychain -p "$KC_PASS" "$KC"
+            security set-keychain-settings -lut 21600 "$KC"
+            printf '%s' "$P12_B64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+            security import "$RUNNER_TEMP/cert.p12" -k "$KC" -P "$P12_PASS" -T /usr/bin/codesign -T /usr/bin/productbuild
+            rm -f "$RUNNER_TEMP/cert.p12"
+            security set-key-partition-list -S apple-tool:,apple: -s -k "$KC_PASS" "$KC"
+            security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+            security default-keychain -s "$KC"
+            ID_NAME=$(security find-identity -v -p codesigning "$KC" | awk -F'"' '/Developer ID Application/{print $2; exit}')
+            if [ -z "$ID_NAME" ]; then
+              echo "::error::No valid Developer ID Application identity in CSC_MAC_P12"
+              exit 1
+            fi
+            echo "CSC_NAME=${ID_NAME#Developer ID Application: }" >> "$GITHUB_ENV"
+            echo "Developer ID signing enabled: $ID_NAME"
           else
             echo "CSC_MAC_P12 secret not set — falling back to ad-hoc signing"
           fi
@@ -94,4 +117,6 @@ jobs:
             release/*.dmg
             release/*.exe
             release/*.zip
+            release/*.AppImage
+            release/*.deb
           if-no-files-found: error

@@ -48,7 +48,7 @@ function findNode(requiredMajor) {
       }
     } catch {}
   } else {
-    candidates.push('/opt/homebrew/bin/node', '/usr/local/bin/node')
+    candidates.push('/opt/homebrew/bin/node', '/usr/local/bin/node', '/usr/bin/node')
     const nvmRoot = path.join(os.homedir(), '.nvm', 'versions', 'node')
     try {
       for (const ver of fs.readdirSync(nvmRoot)) {
@@ -83,7 +83,41 @@ const STEPS = {
   'typecheck:web': [['tsc', '--noEmit', '-p', 'tsconfig.web.json']],
   dist: [['electron-vite', 'build'], ['electron-builder', '--mac']],
   'dist:win': [['electron-vite', 'build'], ['electron-builder', '--win']],
+  'dist:linux': [['electron-vite', 'build'], ['electron-builder', '--linux']],
   'dist:all': [['electron-vite', 'build'], ['electron-builder', '--mac', '--win']]
+}
+
+function ffmpegBin() {
+  if (IS_WIN) return path.join(ROOT, 'extras', 'ffmpeg-win', 'ffmpeg.exe')
+  if (process.platform === 'darwin')
+    return path.join(ROOT, 'extras', 'ffmpeg-mac', 'ffmpeg')
+  return path.join(ROOT, 'extras', 'ffmpeg-linux', 'ffmpeg')
+}
+
+/* the app shells out to a bundled ffmpeg. CI fetches it before packaging, so
+   released builds are fine, but a source checkout never gets one — dev starts
+   happily and then fails at split time with "Something went wrong with the
+   built-in audio tools". Fetch it on demand with the same scripts CI runs. */
+function ensureFfmpeg() {
+  if (fs.existsSync(ffmpegBin())) return
+  const manual = IS_WIN
+    ? 'powershell -ExecutionPolicy Bypass -File scripts/fetch-ffmpeg.ps1'
+    : 'bash scripts/fetch-ffmpeg.sh'
+  console.log('> fetching bundled ffmpeg (one time)')
+  const r = IS_WIN
+    ? spawnSync(
+        'powershell',
+        ['-ExecutionPolicy', 'Bypass', '-File', path.join('scripts', 'fetch-ffmpeg.ps1')],
+        { cwd: ROOT, stdio: 'inherit' }
+      )
+    : spawnSync('bash', [path.join('scripts', 'fetch-ffmpeg.sh')], {
+        cwd: ROOT,
+        stdio: 'inherit'
+      })
+  if (r.status !== 0 || !fs.existsSync(ffmpegBin())) {
+    console.error(`Could not fetch ffmpeg. Fetch it manually, then re-run:\n  ${manual}`)
+    process.exit(r.status || 1)
+  }
 }
 
 function resolveBin(name) {
@@ -113,6 +147,10 @@ function runSteps(steps) {
   }
 }
 
+// commands that produce or run the app need the bundled ffmpeg present;
+// typecheck and plain build do not
+const NEEDS_FFMPEG = new Set(['dev', 'dist', 'dist:win', 'dist:linux', 'dist:all'])
+
 function main() {
   const cmd = process.argv[2]
   const steps = STEPS[cmd]
@@ -138,6 +176,8 @@ function main() {
     })
     process.exit(r.status ?? 1)
   }
+
+  if (NEEDS_FFMPEG.has(cmd)) ensureFfmpeg()
 
   runSteps(steps)
 }

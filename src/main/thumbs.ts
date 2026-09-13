@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
-import { net } from 'electron'
+import { net, BrowserWindow } from 'electron'
 import { userDataDir } from './env'
 
 // mqdefault (320x180) covers every thumbnail slot in the app; library
@@ -39,6 +39,11 @@ export async function cacheThumbnail(videoId: string, url?: string): Promise<voi
     mkdirSync(thumbsDir(), { recursive: true })
     writeFileSync(file, buf)
     memo.delete(videoId)
+    // the renderer may have already resolved (and memoized) null for this id
+    // before the cache was warm — tell it to look again
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.send('thumb:cached', videoId)
+    }
   } catch {}
 }
 

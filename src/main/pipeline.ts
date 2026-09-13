@@ -107,10 +107,10 @@ async function executeJob(job: ActiveJob, url: string, stems?: string[]): Promis
   }
 
   const settings = loadSettings()
-  const useGpu = settings.gpuSplit && process.platform === 'win32'
+  const useGpu = settings.gpuSplit && process.platform !== 'darwin'
   const deviceArg = (): string => {
-    if (process.platform === 'win32') return useGpu ? 'cuda' : 'cpu'
-    return 'auto'
+    if (process.platform === 'darwin') return 'auto'
+    return useGpu ? 'cuda' : 'cpu'
   }
 
   try {
@@ -590,8 +590,8 @@ export async function transcribeLyrics(
 
   const outPath = lyricsPath(videoId)
   const settings = loadSettings()
-  const useGpu = settings.gpuSplit && process.platform === 'win32'
-  const deviceArg = process.platform === 'win32' ? (useGpu ? 'cuda' : 'cpu') : 'auto'
+  const useGpu = settings.gpuSplit && process.platform !== 'darwin'
+  const deviceArg = process.platform === 'darwin' ? 'auto' : (useGpu ? 'cuda' : 'cpu')
 
   const task = new Promise<KaraokeData>((resolve, reject) => {
     sendLyricsProgress(videoId, 0, 'Starting vocal transcription…')
@@ -675,8 +675,8 @@ export function sendTabProgress(
 
 function tabDeviceArg(): string {
   const settings = loadSettings()
-  const useGpu = settings.gpuSplit && process.platform === 'win32'
-  return process.platform === 'win32' ? (useGpu ? 'cuda' : 'cpu') : 'auto'
+  const useGpu = settings.gpuSplit && process.platform !== 'darwin'
+  return process.platform === 'darwin' ? 'auto' : (useGpu ? 'cuda' : 'cpu')
 }
 
 /* one tab-engine run per (song, instrument) at a time; every entry point

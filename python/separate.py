@@ -241,7 +241,12 @@ def separate_demucs(audio, sr, out_dir, model_name, wanted, device_name="auto", 
     dapply.tqdm = types.SimpleNamespace(tqdm=ProgressTqdm) if is_module else ProgressTqdm
 
     if device_name == "auto":
-        device = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
     else:
         device = device_name
     if device == "cuda" and not torch.cuda.is_available():
