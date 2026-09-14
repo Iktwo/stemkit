@@ -62,6 +62,8 @@ export interface EnvStatus {
 export interface EnvEvent {
   message: string
   level: 'info' | 'error' | 'success'
+  pct?: number
+  detail?: string
 }
 
 export type JobStage = 'metadata' | 'download' | 'convert' | 'separate' | 'finalize'

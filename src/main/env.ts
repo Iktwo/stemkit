@@ -582,9 +582,14 @@ export async function detectTools(): Promise<void> {
   await detectJsRuntime()
 }
 
-function sendEnvEvent(message: string, level: 'info' | 'error' | 'success' = 'info'): void {
+function sendEnvEvent(
+  message: string,
+  level: 'info' | 'error' | 'success' = 'info',
+  pct?: number,
+  detail?: string
+): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    win.webContents.send('env:event', { message, level })
+    win.webContents.send('env:event', { message, level, pct, detail })
   }
 }
 
@@ -599,13 +604,14 @@ export async function refreshReady(): Promise<boolean> {
   try {
     const cfgPath = join(venvDir(), 'pyvenv.cfg')
     if (existsSync(cfgPath)) {
-      const content = readFileSync(cfgPath, 'utf8')
-      const match = content.match(/version(?:_info)?\s*=\s*(\d+)\.(\d+)/i)
-      if (match) {
-        const major = parseInt(match[1], 10)
-        const minor = parseInt(match[2], 10)
-        if (major !== 3 || minor < 10) {
-          try { unlinkSync(marker) } catch {}
+      const cfg = readFileSync(cfgPath, 'utf8')
+      const versionMatch = cfg.match(/version\s*=\s*(\d+)\.(\d+)/)
+      if (versionMatch) {
+        const major = parseInt(versionMatch[1], 10)
+        const minor = parseInt(versionMatch[2], 10)
+        if (major === 3 && minor < 10) {
+          sendEnvEvent('Healing outdated Python environment…')
+          rmSync(venvDir(), { recursive: true, force: true })
           state.ready = false
           return false
         }
@@ -613,17 +619,19 @@ export async function refreshReady(): Promise<boolean> {
     }
   } catch {}
 
-  // Verify that the venv python actually runs, has supported version (>= 3.10),
-  // and has the required engine modules installed (bs_roformer)
+  // Test the venv's python actually runs (e.g. dynamic link / architecture mismatch)
   try {
     const out = await runCapture(
       venvPython(),
-      ['-c', 'import sys, bs_roformer; print("%d.%d"%sys.version_info[:2])'],
-      6000
+      ['-c', 'import sys,platform;print("%d.%d %s"%(*sys.version_info[:2],platform.machine()))'],
+      10000
     )
-    const [maj, min] = out.trim().split('.').map((x) => parseInt(x, 10))
-    if (maj !== 3 || min < 10) {
-      try { unlinkSync(marker) } catch {}
+    const [version, machine] = out.trim().split(/\s+/)
+    const [major, minor] = version.split('.').map((x) => parseInt(x, 10))
+    const archOk = !(process.platform === 'darwin' && process.arch === 'arm64' && machine !== 'arm64')
+    if (major !== 3 || minor < 10 || minor > 12 || !archOk) {
+      sendEnvEvent('Healing outdated Python environment…')
+      rmSync(venvDir(), { recursive: true, force: true })
       state.ready = false
       return false
     }
@@ -680,9 +688,12 @@ function downloadTo(
         out.write(chunk)
         if (total > 0) {
           const pct = Math.floor(((start + done) / total) * 100)
+          const mbDone = ((start + done) / (1024 * 1024)).toFixed(1)
+          const mbTotal = (total / (1024 * 1024)).toFixed(1)
+          const detail = `${mbDone} / ${mbTotal} MB`
           if (pct >= lastPct + step) {
             lastPct = pct
-            sendEnvEvent(`${label}: ${pct}%`)
+            sendEnvEvent(`${label}: ${pct}%`, 'info', pct, detail)
           }
           if (onProgress && pct > lastFine) {
             lastFine = pct
@@ -709,6 +720,142 @@ function downloadTo(
     req.on('error', (e) => reject(e instanceof Error ? e : new Error(String(e))))
     req.end()
   })
+}
+
+/* BS-RoFormer SOTA model weights (~700MB). Fetched during first-run setup
+   so that the app is 100% offline-ready. If skipped or deleted, separate.py
+   will download it on demand with live progress emits. */
+export function defaultModelCached(): boolean {
+  try {
+    const defaultCacheDir = join(
+      homedir(),
+      '.cache',
+      'bs-roformer-infer',
+      'roformer-model-bs-roformer-sw-by-jarredou'
+    )
+    const ckpt = join(defaultCacheDir, 'BS-Rofo-SW-Fixed.ckpt')
+    const cfg = join(defaultCacheDir, 'BS-Rofo-SW-Fixed.yaml')
+    return existsSync(ckpt) && existsSync(cfg) && statSync(ckpt).size > 600000000
+  } catch {
+    return false
+  }
+}
+
+let defaultModelPromise: Promise<boolean> | null = null
+const defaultModelListeners = new Set<(pct: number, detail?: string) => void>()
+
+export function ensureDefaultModel(onProgress?: (pct: number, detail?: string) => void): Promise<boolean> {
+  if (onProgress) defaultModelListeners.add(onProgress)
+  const detach = (): boolean => {
+    if (onProgress) defaultModelListeners.delete(onProgress)
+    return true
+  }
+
+  if (defaultModelCached()) {
+    detach()
+    return Promise.resolve(true)
+  }
+
+  if (!defaultModelPromise) {
+    defaultModelPromise = new Promise<boolean>((resolve) => {
+      sendEnvEvent('Downloading BS-RoFormer SOTA model (~700MB, one time)', 'info', 0)
+
+      const pyCode = `
+import json, sys
+try:
+    import bs_roformer.download as bsdl
+    from bs_roformer import ensure_model_assets, DEFAULT_MODEL
+    from bs_roformer.model_registry import MODEL_REGISTRY
+
+    entry = MODEL_REGISTRY.get(DEFAULT_MODEL)
+    search_dirs = bsdl.models_search_dirs()
+    for base in search_dirs:
+        ckpt = base / entry.slug / entry.checkpoint
+        cfg = base / entry.slug / entry.config
+        if ckpt.exists() and cfg.exists() and ckpt.stat().st_size > 600000000:
+            print(json.dumps({"type": "done", "pct": 100}), flush=True)
+            sys.exit(0)
+
+    class ProgressTqdm(bsdl.tqdm):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self._last_report = 0.0
+
+        def update(self, n=1):
+            super().update(n)
+            if self.total:
+                import time
+                pct = int(min(99, (self.n / self.total) * 100))
+                now = time.time()
+                if now - self._last_report >= 0.25 or pct == 99:
+                    self._last_report = now
+                    print(json.dumps({"type": "progress", "pct": pct, "done": self.n, "total": self.total}), flush=True)
+
+    bsdl.tqdm = ProgressTqdm
+    ensure_model_assets(DEFAULT_MODEL)
+    print(json.dumps({"type": "done", "pct": 100}), flush=True)
+except Exception as e:
+    print(json.dumps({"type": "error", "error": str(e)}), flush=True)
+    sys.exit(1)
+`
+
+      const child = spawn(venvPython(), ['-c', pyCode], {
+        env: { ...process.env, PYTHONUNBUFFERED: '1' }
+      })
+
+      let lastPct = 0
+      let stderrTail = ''
+
+      child.stdout?.on('data', (chunk: Buffer) => {
+        for (const line of chunk.toString().split(/[\r\n]+/)) {
+          const trimmed = line.trim()
+          if (!trimmed) continue
+          try {
+            const ev = JSON.parse(trimmed)
+            if (ev.type === 'progress') {
+              const pct = Number(ev.pct ?? 0)
+              if (pct >= lastPct) {
+                lastPct = pct
+                const mbDone = ((ev.done ?? 0) / (1024 * 1024)).toFixed(1)
+                const mbTotal = ((ev.total ?? 0) / (1024 * 1024)).toFixed(1)
+                const detail = `${mbDone} / ${mbTotal} MB`
+                sendEnvEvent(`Downloading BS-RoFormer model: ${pct}%`, 'info', pct, detail)
+                for (const listener of defaultModelListeners) listener(pct, detail)
+              }
+            } else if (ev.type === 'done') {
+              sendEnvEvent('BS-RoFormer model ready', 'success', 100)
+              for (const listener of defaultModelListeners) listener(100, 'Model ready')
+            }
+          } catch {}
+        }
+      })
+
+      child.stderr?.on('data', (chunk: Buffer) => {
+        stderrTail = (stderrTail + chunk.toString()).slice(-1000)
+      })
+
+      child.on('close', (code) => {
+        if (code === 0) {
+          resolve(true)
+        } else {
+          sendEnvEvent(
+            `BS-RoFormer model download deferred (${stderrTail.slice(0, 100).trim() || `code ${code}`}); it will download before first split`,
+            'info'
+          )
+          resolve(false)
+        }
+      })
+
+      child.on('error', (err) => {
+        sendEnvEvent(`BS-RoFormer model download error: ${err.message}`, 'info')
+        resolve(false)
+      })
+    }).finally(() => {
+      defaultModelPromise = null
+    })
+  }
+
+  return defaultModelPromise.then(detach)
 }
 
 /* Mel-band roformer vocals checkpoint. Fetched once per machine when the
@@ -888,6 +1035,8 @@ export function ensureGpuEngine(
             '-m',
             'pip',
             'install',
+            '--progress-bar',
+            'on',
             // required: the CPU torch from bootstrap already satisfies the
             // version spec, so without -U pip would no-op and never swap in
             // the cuda build
@@ -898,23 +1047,28 @@ export function ensureGpuEngine(
             '--index-url',
             GPU_TORCH_INDEX
           ],
-          { env: { ...process.env } }
+          { env: { ...process.env, PYTHONUNBUFFERED: '1' } }
         )
         let lastPct = 0
         let stderrTail = ''
-        child.stdout?.on('data', (chunk: Buffer) => {
-          const t = chunk.toString().trim()
-          if (/^(Collecting|Downloading|Installing)/i.test(t)) sendEnvEvent(t.slice(0, 200))
-        })
+        const handleChunk = (chunk: Buffer): void => {
+          for (const piece of chunk.toString().split(/[\r\n]+/)) {
+            const trimmed = piece.trim()
+            if (!trimmed) continue
+            const progress = parsePipProgress(trimmed)
+            if (progress && progress.pct > lastPct) {
+              lastPct = Math.min(99, progress.pct)
+              sendEnvEvent(`GPU engine: ${lastPct}%`, 'info', lastPct, progress.detail)
+              for (const listener of gpuProgressListeners) listener(lastPct)
+            } else if (/^(Collecting|Downloading|Installing)/i.test(trimmed)) {
+              sendEnvEvent(trimmed.slice(0, 200), 'info')
+            }
+          }
+        }
+        child.stdout?.on('data', handleChunk)
         child.stderr?.on('data', (chunk: Buffer) => {
           stderrTail = (stderrTail + chunk.toString()).slice(-1000)
-          for (const piece of chunk.toString().split(/[\r\n]/)) {
-            const pct = pipProgressPct(piece)
-            if (pct === null || pct <= lastPct) continue
-            lastPct = Math.min(99, pct)
-            sendEnvEvent(`GPU engine: ${lastPct}%`)
-            for (const listener of gpuProgressListeners) listener(lastPct)
-          }
+          handleChunk(chunk)
         })
         child.on('error', reject)
         child.on('close', (code) => {
@@ -945,7 +1099,7 @@ export function ensureGpuEngine(
       gpuProbe = null
       gpuInfo = undefined
       void hasGpuAcceleration()
-      sendEnvEvent('GPU engine ready', 'success')
+      sendEnvEvent('GPU engine ready', 'success', 100)
       return true
     })()
       .catch((err) => {
@@ -964,15 +1118,27 @@ export function ensureGpuEngine(
 
 /* pip progress bars report absolute sizes ("45.2/2450.0 MB") rather than
    percentages; tqdm-style output reports "%" directly */
-function pipProgressPct(line: string): number | null {
-  const pct = line.match(/(\d{1,3})%/)
-  if (pct) return parseInt(pct[1], 10)
-  const sizes = line.match(/([\d.]+)\s*\/\s*([\d.]+)\s*(GB|MB)/i)
+function parsePipProgress(line: string): { pct: number; detail: string } | null {
+  const sizes = line.match(/([\d.]+)\s*\/\s*([\d.]+)\s*(GB|MB|kB|KB)/i)
   if (sizes) {
-    const scale = sizes[3].toUpperCase() === 'GB' ? 1024 : 1
+    const unit = sizes[3].toUpperCase()
+    const scale = unit === 'GB' ? 1024 : unit === 'KB' ? 1 / 1024 : 1
     const done = parseFloat(sizes[1]) * scale
     const total = parseFloat(sizes[2]) * scale
-    if (total > 0) return Math.round((done / total) * 100)
+    if (total > 0) {
+      const pct = Math.min(100, Math.round((done / total) * 100))
+      const speedMatch = line.match(/([\d.]+\s*(?:GB|MB|kB|KB)\/s)/i)
+      const etaMatch = line.match(/(\d+:\d+(?::\d+)?)/)
+      const parts = [`${sizes[1]} / ${sizes[2]} ${sizes[3]}`]
+      if (speedMatch) parts.push(speedMatch[1])
+      if (etaMatch) parts.push(`ETA ${etaMatch[1]}`)
+      return { pct, detail: parts.join(' · ') }
+    }
+  }
+  const pct = line.match(/(\d{1,3})%/)
+  if (pct) {
+    const val = parseInt(pct[1], 10)
+    if (val >= 0 && val <= 100) return { pct: val, detail: '' }
   }
   return null
 }
@@ -1003,9 +1169,11 @@ export async function ensureRuntimePython(): Promise<boolean> {
   if (existsSync(runtimePython())) return true
   try {
     const archive = runtimeArchivePath()
-    sendEnvEvent('Downloading components (~35MB)')
-    await downloadTo(runtimeDownloadUrl(), archive, 'components')
-    sendEnvEvent('Unpacking components')
+    sendEnvEvent('Downloading Python components (~35MB)', 'info', 0)
+    await downloadTo(runtimeDownloadUrl(), archive, 'components', (pct) => {
+      sendEnvEvent(`Downloading components: ${pct}%`, 'info', pct)
+    })
+    sendEnvEvent('Unpacking components', 'info', 100, 'Extracting Python runtime')
     await extractArchive(archive, runtimeDir())
     unlinkSync(archive)
     if (!existsSync(runtimePython())) throw new Error('runtime python missing after extract')
@@ -1129,45 +1297,110 @@ export async function bootstrap(): Promise<boolean> {
       child.on('error', reject)
     })
 
-    sendEnvEvent('Downloading the separation engine — grab a coffee')
-    let lastGeneric = 0
-    // on linux the default PyPI torch wheel is CUDA-enabled and would pull
+    sendEnvEvent('Preparing workspace tools…', 'info')
+
+    const runPipWithProgress = (args: string[], taskLabel: string): Promise<void> =>
+      new Promise<void>((resolve, reject) => {
+        const child = spawn(pip, ['-m', 'pip', 'install', '--progress-bar', 'on', ...args], {
+          env: { ...process.env, PYTHONUNBUFFERED: '1' }
+        })
+        let currentPkg = ''
+        let lastReportedPct = -1
+        let stderrTail = ''
+
+        const handleChunk = (chunk: Buffer): void => {
+          for (const piece of chunk.toString().split(/[\r\n]+/)) {
+            const trimmed = piece.trim()
+            if (!trimmed) continue
+
+            const collectMatch = trimmed.match(/Collecting\s+([a-zA-Z0-9_\-]+)/i)
+            const downloadMatch = trimmed.match(/Downloading\s+([a-zA-Z0-9_\-]+?)(?:-|\.whl|\.tar|\.zip|\s)/i)
+            if (collectMatch) {
+              currentPkg = collectMatch[1]
+              sendEnvEvent(`Preparing ${currentPkg}…`, 'info')
+              continue
+            }
+            if (downloadMatch) {
+              currentPkg = downloadMatch[1]
+            }
+
+            if (/^(Installing collected packages|Installing\s)/i.test(trimmed)) {
+              sendEnvEvent('Installing downloaded packages…', 'info', 100, 'Unpacking and installing wheels')
+              continue
+            }
+            if (/^Successfully installed/i.test(trimmed)) {
+              sendEnvEvent('Packages installed successfully', 'info', 100)
+              continue
+            }
+
+            const progress = parsePipProgress(trimmed)
+            if (progress) {
+              if (progress.pct !== lastReportedPct) {
+                lastReportedPct = progress.pct
+                const pkgLabel = currentPkg ? ` (${currentPkg})` : ''
+                sendEnvEvent(
+                  `Downloading ${taskLabel}${pkgLabel}: ${progress.pct}%`,
+                  'info',
+                  progress.pct,
+                  progress.detail
+                )
+              }
+            } else if (
+              !trimmed.startsWith('Looking in') &&
+              !trimmed.startsWith('Using cached') &&
+              !trimmed.startsWith('━━━━━━━━')
+            ) {
+              if (trimmed.startsWith('ERROR') || trimmed.startsWith('error')) {
+                sendEnvEvent(trimmed.slice(0, 200), 'error')
+              }
+            }
+          }
+        }
+
+        child.stdout?.on('data', handleChunk)
+        child.stderr?.on('data', (chunk: Buffer) => {
+          stderrTail = (stderrTail + chunk.toString()).slice(-1000)
+          handleChunk(chunk)
+        })
+
+        child.on('close', (code) => {
+          if (code === 0) {
+            resolve()
+          } else {
+            const lastErrLine =
+              stderrTail.trim().split('\n').filter((l) => l.trim().length > 0).pop() ?? ''
+            reject(
+              new Error(
+                `${taskLabel} install failed (${code})${
+                  lastErrLine ? `: ${lastErrLine.slice(0, 200)}` : ''
+                }`
+              )
+            )
+          }
+        })
+        child.on('error', reject)
+      })
+
+    // On linux the default PyPI torch wheel is CUDA-enabled and would pull
     // ~2GB of nvidia deps for every user, GPU or not — install the cpu build
     // in its own step (windows/mac defaults are already CPU, so only linux
     // needs the override) and let the GPU toggle swap in cu121 on demand.
-    // --index-url can't be mixed into the big install below: the cpu index
-    // only hosts torch packages, so non-torch deps would fail to resolve.
     if (process.platform === 'linux') {
-      await new Promise<void>((resolve, reject) => {
-        const child = spawn(pip, [
-          '-m',
-          'pip',
-          'install',
-          '--progress-bar',
-          'off',
+      sendEnvEvent('Downloading PyTorch CPU engine (~800MB)', 'info', 0)
+      await runPipWithProgress(
+        [
           'torch==2.5.1',
           'torchaudio==2.5.1',
           '--index-url',
           'https://download.pytorch.org/whl/cpu'
-        ])
-        child.stderr?.on('data', (chunk: Buffer) => {
-          const t = chunk.toString().trim()
-          if (t.startsWith('ERROR') || t.startsWith('error')) sendEnvEvent(t.slice(0, 200), 'error')
-        })
-        child.on('close', (code) =>
-          code === 0 ? resolve() : reject(new Error(`cpu torch install failed (${code})`))
-        )
-        child.on('error', reject)
-      })
+        ],
+        'PyTorch CPU'
+      )
     }
-    // (already satisfied on linux by the cpu step above — pip skips it)
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn(pip, [
-        '-m',
-        'pip',
-        'install',
-        '--progress-bar',
-        'off',
+
+    sendEnvEvent('Downloading separation engine packages (~1.5GB)', 'info', 0)
+    await runPipWithProgress(
+      [
         'demucs==4.0.1',
         'bs-roformer-infer>=0.1.5',
         'torch>=2.5.1',
@@ -1179,43 +1412,13 @@ export async function bootstrap(): Promise<boolean> {
         'yt-dlp',
         'faster-whisper',
         'soundfile'
-      ])
-      let buffer = ''
-      let stderrTail = ''
-      child.stdout?.on('data', (chunk: Buffer) => {
-        buffer += chunk.toString()
-        const lines = buffer.split('\n')
-        buffer = lines.pop() ?? ''
-        for (const line of lines) {
-          const t = line.trim()
-          if (!t || /^(Looking in|Using cached)/.test(t)) continue
-          if (/^(Collecting|Downloading|Installing collected|Successfully installed)/i.test(t)) {
-            const now = Date.now()
-            if (now - lastGeneric > 8000) {
-              lastGeneric = now
-              sendEnvEvent('Still downloading…')
-            }
-            continue
-          }
-          sendEnvEvent(t.length > 120 ? t.slice(0, 117) + '...' : t)
-        }
-      })
-      child.stderr?.on('data', (chunk: Buffer) => {
-        stderrTail = (stderrTail + chunk.toString()).slice(-1000)
-      })
-      child.on('close', (code) => {
-        if (code === 0) {
-          resolve()
-        } else {
-          const lastErrLine = stderrTail.trim().split('\n').filter((l) => l.trim().length > 0).pop() ?? ''
-          reject(new Error(`engine install failed (${code})${lastErrLine ? `: ${lastErrLine.slice(0, 200)}` : ''}`))
-        }
-      })
-      child.on('error', reject)
-    })
+      ],
+      'engine packages'
+    )
 
+    sendEnvEvent('Installing YouTube challenge solver…', 'info')
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(pip, ['-m', 'pip', 'install', 'yt-dlp-ejs'])
+      const child = spawn(pip, ['-m', 'pip', 'install', '-q', 'yt-dlp-ejs'])
       let lastErr = ''
       child.stdout?.on('data', (chunk: Buffer) => {
         for (const line of chunk.toString().split('\n')) {
@@ -1237,12 +1440,12 @@ export async function bootstrap(): Promise<boolean> {
       child.on('error', reject)
     })
 
+    sendEnvEvent('Ensuring BS-RoFormer SOTA model is ready (~700MB)…', 'info')
+    await ensureDefaultModel()
+
     writeFileSync(join(venv, '.ready'), JSON.stringify({ createdAt: Date.now() }))
     await refreshReady()
-    sendEnvEvent('Engine ready', 'success')
-    // no checkpoint prefetch here: the optional engines (~913MB vocals,
-    // ~320MB fine-tuned) download only when their settings toggles are on,
-    // handled by the app-start prefetch in index.ts
+    sendEnvEvent('Engine ready', 'success', 100)
     return true
   } catch (err) {
     sendEnvEvent(err instanceof Error ? err.message : String(err), 'error')

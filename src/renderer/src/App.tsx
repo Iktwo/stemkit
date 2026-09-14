@@ -22,6 +22,8 @@ import { PlayerProvider, usePlayer, clearBufferCache } from './lib/PlayerContext
 interface EnvLog {
   message: string
   level: string
+  pct?: number
+  detail?: string
 }
 
 function stageLabel(stage: JobStage, pct: number): string {
@@ -99,7 +101,10 @@ function MainApp(): React.ReactElement {
       }
     })
     const offEnv = window.stemkit.onEnvEvent((e) =>
-      setEnvLogs((l) => [...l.slice(-300), { message: e.message, level: e.level }])
+      setEnvLogs((l) => [
+        ...l.slice(-300),
+        { message: e.message, level: e.level, pct: e.pct, detail: e.detail }
+      ])
     )
     const offUpdate = window.stemkit.onUpdateEvent((e) => setUpdate(e))
     void window.stemkit.getAppVersion().then(setAppVersion)

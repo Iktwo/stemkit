@@ -78,7 +78,38 @@ def separate_roformer(audio, sr, out_dir, wanted, device_name="auto"):
     emit(type="progress", stage="model", pct=0, message=f"loading BS-RoFormer (SOTA 6-stem) on {device_str}")
 
     try:
-        ckpt_path, cfg_path = ensure_model_assets(DEFAULT_MODEL)
+        try:
+            import bs_roformer.download as bsdl
+            class DownloadProgressTqdm(bsdl.tqdm):
+                def __init__(self, *a, **kw):
+                    super().__init__(*a, **kw)
+                    self._last_report = 0.0
+
+                def update(self, n=1):
+                    super().update(n)
+                    if self.total:
+                        pct = int(min(99, (self.n / self.total) * 100))
+                        now = time.time()
+                        if now - self._last_report >= 0.25 or pct == 99:
+                            self._last_report = now
+                            mb_done = self.n / (1024 * 1024)
+                            mb_total = self.total / (1024 * 1024)
+                            emit(
+                                type="progress",
+                                stage="separate",
+                                pct=pct,
+                                message=f"Downloading BS-RoFormer model ({pct}%, {mb_done:.0f}/{mb_total:.0f} MB)"
+                            )
+
+            orig_tqdm = bsdl.tqdm
+            bsdl.tqdm = DownloadProgressTqdm
+            try:
+                ckpt_path, cfg_path = ensure_model_assets(DEFAULT_MODEL)
+            finally:
+                bsdl.tqdm = orig_tqdm
+        except Exception:
+            ckpt_path, cfg_path = ensure_model_assets(DEFAULT_MODEL)
+
         with open(cfg_path) as f:
             config = ConfigDict(yaml.load(f, Loader=SafeLoaderWithTuple))
         model = get_model_from_config("bs_roformer", config)
