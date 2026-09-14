@@ -31,6 +31,8 @@ import { loadSettings, saveSettings } from './settings'
 import { loadSongs, removeSong, stemBuffers, stemsDir, stemsFor, mixWavPath, loadLyrics, saveLyrics, loadTabs, saveTabs, tabMidiPath } from './library'
 import {
   startJob,
+  startLocalJob,
+  reprocessTrack,
   cancelJob,
   searchYouTube,
   transcribeLyrics,
@@ -183,6 +185,48 @@ app.whenReady().then(async () => {
   ipcMain.handle('jobs:start', async (_e, url: string, model?: string, stems?: string[], force?: boolean) => {
     void startJob(url, model, stems, force)
     return { started: true }
+  })
+  ipcMain.handle('jobs:start-local', async (_e, filePath: string, model?: string, stems?: string[], force?: boolean) => {
+    void startLocalJob(filePath, model, stems, force)
+    return { started: true }
+  })
+  ipcMain.handle('files:pick-audio', async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Select Audio Files',
+      buttonLabel: 'Open Audio',
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        {
+          name: 'Audio Files',
+          extensions: [
+            'mp3',
+            'wav',
+            'flac',
+            'm4a',
+            'aac',
+            'ogg',
+            'opus',
+            'aiff',
+            'aif',
+            'alac',
+            'wma',
+            'mp4',
+            'm4b'
+          ]
+        },
+        { name: 'All Files', extensions: ['*'] }
+      ]
+    })
+    if (result.canceled || !result.filePaths.length) return null
+    return result.filePaths
+  })
+  ipcMain.handle('track:reprocess', async (_e, videoId: string, model?: string, stems?: string[]) => {
+    await reprocessTrack(videoId, model, stems)
+  })
+  ipcMain.handle('file:reveal', (_e, filePath: string) => {
+    if (typeof filePath === 'string' && existsSync(filePath)) {
+      shell.showItemInFolder(filePath)
+    }
   })
   ipcMain.handle('jobs:cancel', (_e, videoId?: string) => cancelJob(videoId))
 

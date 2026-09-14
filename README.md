@@ -3,9 +3,9 @@
 > [!NOTE]
 > **Credits & Acknowledgement**: StemKit was created and designed by **[Daniel Ravina](https://github.com/danielravina)** in the original [danielravina/stemkit](https://github.com/danielravina/stemkit) repository. All credit for the foundational architecture and concept belongs to him! This fork contains personal enhancements and community improvements built on top of his work (such as SOTA BS-RoFormer stem separation, continuous background playback with a mini player, audio-focused playback that ditches YouTube video streaming once fetched, and UI polish).
 
-Split any YouTube song into isolated stems — **vocals, drums, bass, guitar, piano** and more — right on your machine.
+Split any YouTube song or local audio file into isolated stems — **vocals, drums, bass, guitar, piano** and more — right on your machine.
 
-Search YouTube or paste a link, pick the instruments you want, and play the result like a multitrack DAW: every stem on its own fader, all perfectly in sync. Karaoke, acapellas and instrumentals are one click away. Once a track is fetched, YouTube is ditched entirely for pure, lightweight local audio playback.
+Search YouTube, paste a link, or load local music files (MP3, WAV, FLAC, M4A, OGG, AIFF…), pick the instruments you want, and play the result like a multitrack DAW: every stem on its own fader, all perfectly in sync. Karaoke, acapellas and instrumentals are one click away. Once a track is fetched or loaded, everything runs entirely via pure, lightweight local audio playback.
 
 Everything runs locally — no accounts, no cloud, no API keys.
 
@@ -17,9 +17,9 @@ Everything runs locally — no accounts, no cloud, no API keys.
 
 ## Features
 
-- Built-in YouTube search, or paste a link
+- Built-in YouTube search, paste a link, or load local audio files (MP3, WAV, FLAC, M4A, OGG, AIFF…) via file browser or drag-and-drop
 - Choose your instruments individually; the right separation engine is picked for you
-- Pure local audio playback — once fetched, no YouTube video streaming or overhead
+- Pure local audio playback — once fetched or imported, no YouTube video streaming or overhead
 - Persistent mini player for seamless listening while browsing or fetching new tracks
 - One-click presets: **All · Karaoke · Acapella · Drums + Bass**
 - Per-stem mute/solo/volume, waveforms with click-to-seek

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { WaveIcon } from '../components/Icons'
 
 // library thumbnails resolve through the local cache in the main process
 // (userData/thumbs).
@@ -62,6 +63,12 @@ export function useThumb(videoId: string): string | null {
 
 export function Thumb({ videoId, className }: { videoId: string; className: string }): React.ReactElement {
   const src = useThumb(videoId)
-  if (!src) return <span className={className} />
+  if (!src) {
+    return (
+      <span className={`${className} flex items-center justify-center bg-white/[0.04] text-white/30 border border-white/5 overflow-hidden`}>
+        <WaveIcon className="w-5 h-5 opacity-40" />
+      </span>
+    )
+  }
   return <img src={src} alt="" className={className} draggable={false} />
 }

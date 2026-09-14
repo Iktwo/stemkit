@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { JobEvent, EnvEvent, UpdateEvent, AppSettings, StemKitApi, LyricsProgress, TabProgress } from '../shared/types'
 
 function subscribe<T>(channel: string, cb: (data: T) => void): () => void {
@@ -20,6 +20,19 @@ const api: StemKitApi = {
   exportAllStems: (videoId) => ipcRenderer.invoke('stems:export-all', videoId),
   searchYouTube: (query) => ipcRenderer.invoke('search:youtube', query),
   startJob: (url, model, stems, force) => ipcRenderer.invoke('jobs:start', url, model, stems, force),
+  startLocalJob: (filePath, model, stems, force) =>
+    ipcRenderer.invoke('jobs:start-local', filePath, model, stems, force),
+  pickAudioFiles: () => ipcRenderer.invoke('files:pick-audio'),
+  reprocessTrack: (videoId, model, stems) =>
+    ipcRenderer.invoke('track:reprocess', videoId, model, stems),
+  revealFile: (filePath) => ipcRenderer.invoke('file:reveal', filePath),
+  getPathForFile: (file: File) => {
+    try {
+      return webUtils.getPathForFile(file)
+    } catch {
+      return (file as unknown as { path?: string }).path || ''
+    }
+  },
   cancelJob: (videoId?: string) => ipcRenderer.invoke('jobs:cancel', videoId),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   getAppVersion: () => ipcRenderer.invoke('app:version'),

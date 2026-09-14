@@ -1,7 +1,9 @@
 import { spawn, type ChildProcess } from 'child_process'
 import { createInterface } from 'readline'
-import { readdirSync, mkdirSync, rmSync, existsSync } from 'fs'
-import { join } from 'path'
+import { readdirSync, mkdirSync, rmSync, existsSync, statSync } from 'fs'
+import { join, parse, normalize, extname } from 'path'
+import { fileURLToPath } from 'url'
+import { createHash } from 'crypto'
 import { BrowserWindow } from 'electron'
 import {
   venvPython,
@@ -43,7 +45,7 @@ import {
   type MidiFileInfo
 } from '../shared/types'
 import { parseVideoId } from '../shared/url'
-import { cacheThumbnail } from './thumbs'
+import { cacheThumbnail, thumbPath, thumbsDir } from './thumbs'
 
 interface ActiveJob {
   videoId: string
@@ -51,10 +53,13 @@ interface ActiveJob {
   model: string
   cancelled: boolean
   proc?: ChildProcess
+  sourceType?: 'youtube' | 'local'
+  filePath?: string
 }
 
 interface QueuedItem {
-  url: string
+  url?: string
+  filePath?: string
   videoId: string
   model: string
   stems?: string[]
@@ -88,6 +93,128 @@ export function extractVideoId(url: string): string | null {
   return parseVideoId(url)
 }
 
+export const AUDIO_EXTENSIONS = new Set([
+  '.mp3',
+  '.wav',
+  '.flac',
+  '.m4a',
+  '.aac',
+  '.ogg',
+  '.opus',
+  '.aiff',
+  '.aif',
+  '.alac',
+  '.wma',
+  '.mp4',
+  '.m4b',
+  '.webm',
+  '.mkv'
+])
+
+export function cleanPath(input: string): string {
+  let p = input.trim()
+  if (p.startsWith('file://')) {
+    try {
+      p = fileURLToPath(p)
+    } catch {
+      p = p.replace(/^file:\/\//, '')
+    }
+  }
+  if ((p.startsWith('"') && p.endsWith('"')) || (p.startsWith("'") && p.endsWith("'"))) {
+    p = p.slice(1, -1)
+  }
+  return normalize(p)
+}
+
+export function isAudioFilePath(input: string): boolean {
+  const p = cleanPath(input)
+  const ext = extname(p).toLowerCase()
+  return AUDIO_EXTENSIONS.has(ext)
+}
+
+export function localFileId(filePath: string): string {
+  const normalized = normalize(filePath)
+  const hash = createHash('sha256').update(normalized).digest('hex').slice(0, 11)
+  return `local-${hash}`
+}
+
+async function probeLocalAudio(
+  ffmpeg: string,
+  filePath: string
+): Promise<{ title?: string; duration: number }> {
+  return new Promise((resolve) => {
+    const child = spawn(ffmpeg, ['-i', filePath], { env: { ...process.env } })
+    let stderr = ''
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString()
+    })
+    child.on('close', () => {
+      let duration = 0
+      const durMatch = stderr.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/i)
+      if (durMatch) {
+        const hours = parseInt(durMatch[1], 10)
+        const mins = parseInt(durMatch[2], 10)
+        const secs = parseFloat(durMatch[3])
+        duration = Math.round(hours * 3600 + mins * 60 + secs)
+      }
+
+      let title: string | undefined
+      let artist: string | undefined
+
+      const metaSection = stderr.split(/Metadata:/i)[1]
+      if (metaSection) {
+        const titleMatch = metaSection.match(/^\s*title\s*:\s*(.+)$/im)
+        if (titleMatch) title = titleMatch[1].trim()
+        const artistMatch = metaSection.match(/^\s*artist\s*:\s*(.+)$/im)
+        if (artistMatch) artist = artistMatch[1].trim()
+      }
+
+      let formattedTitle: string | undefined
+      if (artist && title) {
+        formattedTitle = `${artist} - ${title}`
+      } else if (title) {
+        formattedTitle = title
+      }
+
+      resolve({ title: formattedTitle, duration })
+    })
+    child.on('error', () => {
+      resolve({ duration: 0 })
+    })
+  })
+}
+
+async function extractLocalAlbumArt(
+  ffmpeg: string,
+  filePath: string,
+  videoId: string
+): Promise<void> {
+  const target = thumbPath(videoId)
+  mkdirSync(thumbsDir(), { recursive: true })
+
+  return new Promise((resolve) => {
+    const child = spawn(ffmpeg, ['-y', '-i', filePath, '-an', '-vframes', '1', target], {
+      env: { ...process.env }
+    })
+    child.on('close', (code) => {
+      if (code === 0 && existsSync(target)) {
+        try {
+          if (statSync(target).size > 0) {
+            for (const win of BrowserWindow.getAllWindows()) {
+              win.webContents.send('thumb:cached', videoId)
+            }
+            resolve()
+            return
+          }
+          rmSync(target, { force: true })
+        } catch {}
+      }
+      resolve()
+    })
+    child.on('error', () => resolve())
+  })
+}
+
 function updateQueuePositions(): void {
   queue.forEach((item, index) => {
     const queuedJob = jobs.get(item.videoId)
@@ -97,11 +224,14 @@ function updateQueuePositions(): void {
   })
 }
 
-async function executeJob(job: ActiveJob, url: string, stems?: string[]): Promise<void> {
-  currentRunningJob = job
-  const videoId = job.videoId
-  const startedAt = Date.now()
-
+async function separateAndFinalize(
+  job: ActiveJob,
+  videoId: string,
+  meta: { title: string; duration: number },
+  startedAt: number,
+  stems?: string[],
+  extra?: { source?: 'youtube' | 'local'; filePath?: string }
+): Promise<void> {
   const bail = (message: string): never => {
     throw Object.assign(new Error(message), { videoId })
   }
@@ -111,6 +241,112 @@ async function executeJob(job: ActiveJob, url: string, stems?: string[]): Promis
   const deviceArg = (): string => {
     if (process.platform === 'darwin') return 'auto'
     return useGpu ? 'cuda' : 'cpu'
+  }
+
+  rmSync(stemsDir(videoId), { recursive: true, force: true })
+  mkdirSync(stemsDir(videoId), { recursive: true })
+  progress(
+    job,
+    'separate',
+    0,
+    'Preparing BS-RoFormer SOTA engine…'
+  )
+
+  if (job.cancelled || !jobs.has(videoId)) return
+  if (useGpu) {
+    if (
+      !(await ensureGpuEngine(
+        (pct) => progress(job, 'separate', 0, `Downloading GPU engine: ${pct}%`),
+        true
+      ))
+    ) {
+      bail('Could not prepare the GPU engine — switch back to CPU in Settings and try again')
+    }
+  }
+
+  progress(job, 'separate', 0, 'Separating stems')
+  let scriptError: string | null = null
+  let producedStems: string[] | null = null
+  await runProcess(
+    job,
+    venvPython(),
+    [
+      separateScript(),
+      '--input',
+      mixWavPath(videoId),
+      '--out',
+      stemsDir(videoId),
+      '--model',
+      job.model,
+      '--device',
+      deviceArg(),
+      '--shifts',
+      String(settings.shifts),
+      ...(stems?.length ? ['--only', stems.join(',')] : [])
+    ],
+    {
+      onLine: (line) => {
+        let parsed: Record<string, unknown>
+        try {
+          parsed = JSON.parse(line)
+        } catch {
+          return
+        }
+        if (parsed.type === 'progress') {
+          progress(
+            job,
+            'separate',
+            Number(parsed.pct ?? 0),
+            typeof parsed.message === 'string' ? parsed.message : undefined
+          )
+        } else if (parsed.type === 'error') {
+          scriptError = `Separation failed: ${String(parsed.message)}`
+        } else if (parsed.type === 'done' && Array.isArray(parsed.stems)) {
+          producedStems = (parsed.stems as unknown[]).map(String)
+        }
+      }
+    }
+  )
+  if (job.cancelled || !jobs.has(videoId)) return
+  if (scriptError) bail(scriptError)
+
+  const finalStems: string[] = producedStems ?? []
+  if (!stemsPresent(videoId, finalStems)) bail('Separation finished but stem files are missing')
+
+  if (finalStems.includes('vocals')) {
+    progress(job, 'finalize', 40, 'Transcribing synchronized karaoke lyrics…')
+    try {
+      await transcribeLyrics(videoId, 'large-v3-turbo')
+    } catch (err) {
+      console.warn(`Auto lyric transcription error for ${videoId} (non-fatal):`, err)
+    }
+  }
+  if (job.cancelled || !jobs.has(videoId)) return
+
+  progress(job, 'finalize', 100, 'Adding to library')
+  const took = Math.round((Date.now() - startedAt) / 1000)
+  const existing = loadSongs().find((s) => s.videoId === videoId)
+  const songs = upsertSong({
+    videoId,
+    title: meta.title,
+    duration: meta.duration,
+    addedAt: existing?.addedAt ?? Date.now(),
+    model: job.model,
+    stems: finalStems,
+    took,
+    source: extra?.source ?? existing?.source ?? 'youtube',
+    filePath: extra?.filePath ?? existing?.filePath
+  })
+  send({ kind: 'done', data: { videoId, song: songs[0] } })
+}
+
+async function executeJob(job: ActiveJob, url: string, stems?: string[]): Promise<void> {
+  currentRunningJob = job
+  const videoId = job.videoId
+  const startedAt = Date.now()
+
+  const bail = (message: string): never => {
+    throw Object.assign(new Error(message), { videoId })
   }
 
   try {
@@ -207,98 +443,97 @@ async function executeJob(job: ActiveJob, url: string, stems?: string[]): Promis
       progress(job, 'convert', 100)
     }
 
-    rmSync(stemsDir(videoId), { recursive: true, force: true })
-    mkdirSync(stemsDir(videoId), { recursive: true })
-    progress(
-      job,
-      'separate',
-      0,
-      'Preparing BS-RoFormer SOTA engine…'
-    )
-
-    if (job.cancelled || !jobs.has(videoId)) return
-    if (useGpu) {
-      if (
-        !(await ensureGpuEngine(
-          (pct) => progress(job, 'separate', 0, `Downloading GPU engine: ${pct}%`),
-          true
-        ))
-      ) {
-        bail('Could not prepare the GPU engine — switch back to CPU in Settings and try again')
-      }
+    await separateAndFinalize(job, videoId, meta!, startedAt, stems, {
+      source: existing?.source ?? 'youtube',
+      filePath: existing?.filePath
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (message !== 'cancelled') {
+      send({ kind: 'failed', data: { videoId, message } })
     }
+  } finally {
+    jobs.delete(videoId)
+    currentRunningJob = null
+    processNextInQueue()
+  }
+}
 
-    progress(job, 'separate', 0, 'Separating stems')
-    let scriptError: string | null = null
-    let producedStems: string[] | null = null
-    await runProcess(
-      job,
-      venvPython(),
-      [
-        separateScript(),
-        '--input',
-        mixWavPath(videoId),
-        '--out',
-        stemsDir(videoId),
-        '--model',
-        job.model,
-        '--device',
-        deviceArg(),
-        '--shifts',
-        String(settings.shifts),
-        ...(stems?.length ? ['--only', stems.join(',')] : [])
-      ],
-      {
-        onLine: (line) => {
-          let parsed: Record<string, unknown>
-          try {
-            parsed = JSON.parse(line)
-          } catch {
-            return
-          }
-          if (parsed.type === 'progress') {
-            progress(
-              job,
-              'separate',
-              Number(parsed.pct ?? 0),
-              typeof parsed.message === 'string' ? parsed.message : undefined
-            )
-          } else if (parsed.type === 'error') {
-            scriptError = `Separation failed: ${String(parsed.message)}`
-          } else if (parsed.type === 'done' && Array.isArray(parsed.stems)) {
-            producedStems = (parsed.stems as unknown[]).map(String)
-          }
+async function executeLocalJob(job: ActiveJob, filePath: string, stems?: string[]): Promise<void> {
+  currentRunningJob = job
+  const videoId = job.videoId
+  const startedAt = Date.now()
+
+  const bail = (message: string): never => {
+    throw Object.assign(new Error(message), { videoId })
+  }
+
+  try {
+    const existing = loadSongs().find((s) => s.videoId === videoId)
+    mkdirSync(songDir(videoId), { recursive: true })
+
+    let meta: { title: string; duration: number }
+    const hasMixWav = existsSync(mixWavPath(videoId))
+
+    if (existing && hasMixWav && existing.title) {
+      meta = { title: existing.title, duration: existing.duration || 0 }
+      job.title = meta.title
+      progress(job, 'metadata', 100, meta.title)
+    } else {
+      if (!filePath || !existsSync(filePath)) {
+        bail(`Audio file not found: ${filePath}`)
+      }
+
+      progress(job, 'metadata', 0, 'Reading audio file info')
+
+      const ffmpeg = getStatus().ffmpeg.path
+      if (!ffmpeg) bail('Something went wrong with the built-in audio tools. Try reinstalling StemKit.')
+      const ffmpegBin = ffmpeg as string
+
+      const probe = await probeLocalAudio(ffmpegBin, filePath)
+      const title = probe.title || parse(filePath).name
+      job.title = title
+      progress(job, 'metadata', 50, title)
+
+      await extractLocalAlbumArt(ffmpegBin, filePath, videoId)
+      if (job.cancelled || !jobs.has(videoId)) return
+      progress(job, 'metadata', 100, title)
+
+      progress(job, 'convert', 0, 'Converting audio to WAV')
+      await runProcess(job, ffmpegBin, [
+        '-y',
+        '-i',
+        filePath,
+        '-af',
+        'aresample=44100:resampler=soxr',
+        '-ar',
+        '44100',
+        '-ac',
+        '2',
+        '-c:a',
+        'pcm_s16le',
+        mixWavPath(videoId)
+      ])
+      if (job.cancelled || !jobs.has(videoId)) return
+
+      let duration = probe.duration
+      if (!duration || duration <= 0) {
+        try {
+          const stat = statSync(mixWavPath(videoId))
+          duration = Math.max(1, Math.round((stat.size - 44) / 176400))
+        } catch {
+          duration = 0
         }
       }
-    )
-    if (job.cancelled || !jobs.has(videoId)) return
-    if (scriptError) bail(scriptError)
 
-    const finalStems: string[] = producedStems ?? []
-    if (!stemsPresent(videoId, finalStems)) bail('Separation finished but stem files are missing')
-
-    if (finalStems.includes('vocals')) {
-      progress(job, 'finalize', 40, 'Transcribing synchronized karaoke lyrics…')
-      try {
-        await transcribeLyrics(videoId, 'large-v3-turbo')
-      } catch (err) {
-        console.warn(`Auto lyric transcription error for ${videoId} (non-fatal):`, err)
-      }
+      meta = { title, duration }
+      progress(job, 'convert', 100)
     }
-    if (job.cancelled || !jobs.has(videoId)) return
 
-    progress(job, 'finalize', 100, 'Adding to library')
-    const took = Math.round((Date.now() - startedAt) / 1000)
-    const songs = upsertSong({
-      videoId,
-      title: meta!.title,
-      duration: meta!.duration,
-      addedAt: existing?.addedAt ?? Date.now(),
-      model: job.model,
-      stems: finalStems,
-      took
+    await separateAndFinalize(job, videoId, meta, startedAt, stems, {
+      source: 'local',
+      filePath: filePath || existing?.filePath
     })
-    send({ kind: 'done', data: { videoId, song: songs[0] } })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     if (message !== 'cancelled') {
@@ -323,7 +558,60 @@ function processNextInQueue(): void {
   }
 
   updateQueuePositions()
-  void executeJob(nextJob, nextItem.url, nextItem.stems)
+  if (nextItem.filePath) {
+    void executeLocalJob(nextJob, nextItem.filePath, nextItem.stems)
+  } else {
+    void executeJob(nextJob, nextItem.url ?? '', nextItem.stems)
+  }
+}
+
+export async function startLocalJob(
+  rawPath: string,
+  model = MODEL_EXTENDED,
+  stems?: string[],
+  force = false
+): Promise<void> {
+  const filePath = cleanPath(rawPath)
+  if (!existsSync(filePath)) {
+    send({ kind: 'failed', data: { videoId: '', message: `Audio file not found: ${filePath}` } })
+    return
+  }
+
+  const videoId = localFileId(filePath)
+  if (jobs.has(videoId)) {
+    send({ kind: 'failed', data: { videoId, message: 'This song is already being processed or queued' } })
+    return
+  }
+
+  const existing = loadSongs().find((s) => s.videoId === videoId)
+  const covered =
+    !force &&
+    existing &&
+    existing.model === model &&
+    !!existing.stems?.length &&
+    (stems?.length ? stems.every((s) => existing.stems!.includes(s)) : true)
+  if (covered && stemsPresent(videoId, stemsFor(existing))) {
+    send({ kind: 'done', data: { videoId, song: existing } })
+    return
+  }
+
+  const job: ActiveJob = {
+    videoId,
+    model,
+    cancelled: false,
+    title: existing?.title || parse(filePath).name,
+    sourceType: 'local',
+    filePath
+  }
+  jobs.set(videoId, job)
+
+  if (currentRunningJob !== null) {
+    queue.push({ filePath, videoId, model, stems, force })
+    progress(job, 'metadata', 0, `In queue (position #${queue.length})`)
+    return
+  }
+
+  void executeLocalJob(job, filePath, stems)
 }
 
 export async function startJob(
@@ -333,9 +621,14 @@ export async function startJob(
   force = false
 ): Promise<void> {
   const url = rawUrl.trim()
+  const cleaned = cleanPath(url)
+  if (existsSync(cleaned) && (isAudioFilePath(cleaned) || statSync(cleaned).isFile())) {
+    return startLocalJob(cleaned, model, stems, force)
+  }
+
   const videoId = parseVideoId(url)
   if (!videoId) {
-    send({ kind: 'failed', data: { videoId: '', message: 'Could not parse a YouTube URL or video id out of that' } })
+    send({ kind: 'failed', data: { videoId: '', message: 'Could not parse a YouTube URL, video ID, or audio file path' } })
     return
   }
   if (jobs.has(videoId)) {
@@ -355,7 +648,13 @@ export async function startJob(
     return
   }
 
-  const job: ActiveJob = { videoId, model, cancelled: false, title: existing?.title }
+  const job: ActiveJob = {
+    videoId,
+    model,
+    cancelled: false,
+    title: existing?.title,
+    sourceType: 'youtube'
+  }
   jobs.set(videoId, job)
 
   if (currentRunningJob !== null) {
@@ -381,16 +680,35 @@ export async function reprocessTrack(
   // Cancel any existing job for this videoId
   cancelJob(videoId)
 
-  const job: ActiveJob = { videoId, model, cancelled: false, title: existing.title }
+  const isLocal = existing.source === 'local' || videoId.startsWith('local-')
+  const job: ActiveJob = {
+    videoId,
+    model,
+    cancelled: false,
+    title: existing.title,
+    sourceType: isLocal ? 'local' : 'youtube',
+    filePath: existing.filePath
+  }
   jobs.set(videoId, job)
 
   if (currentRunningJob !== null) {
-    queue.push({ url: '', videoId, model, stems, force: true })
+    queue.push({
+      url: isLocal ? undefined : '',
+      filePath: isLocal ? existing.filePath : undefined,
+      videoId,
+      model,
+      stems,
+      force: true
+    })
     progress(job, 'metadata', 0, `In queue (position #${queue.length})`)
     return
   }
 
-  void executeJob(job, '', stems)
+  if (isLocal) {
+    void executeLocalJob(job, existing.filePath || '', stems)
+  } else {
+    void executeJob(job, '', stems)
+  }
 }
 
 function runProcess(

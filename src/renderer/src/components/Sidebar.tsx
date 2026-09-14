@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react'
 import type { Song, EnvStatus } from '../../../shared/types'
 import { fmtTime } from '../lib/format'
 import { Thumb } from '../lib/thumbs'
-import { TrashIcon, PlusIcon, GearIcon } from './Icons'
+import { TrashIcon, PlusIcon, GearIcon, FolderIcon } from './Icons'
 
 interface Props {
   songs: Song[]
@@ -16,6 +16,7 @@ interface Props {
   onSelect: (videoId: string) => void
   onDelete: (videoId: string) => void
   onAdd: () => void
+  onOpenLocalFile?: () => void
   onInstallUpdate: () => void
   onOpenSettings: () => void
 }
@@ -32,6 +33,7 @@ export function Sidebar({
   onSelect,
   onDelete,
   onAdd,
+  onOpenLocalFile,
   onInstallUpdate,
   onOpenSettings
 }: Props): React.ReactElement {
@@ -48,19 +50,30 @@ export function Sidebar({
       {/* Window drag header without branding badge */}
       <div className="drag-region h-10 shrink-0 border-b border-white/[0.06]" />
 
-      {/* Top Action: New Split */}
-      <div className="px-3 pt-3 pb-3">
+      {/* Top Actions: New Split & Open File */}
+      <div className="px-3 pt-3 pb-3 flex gap-1.5">
         <button
           onClick={onAdd}
-          className={`no-drag w-full flex items-center justify-center gap-2 rounded-xl py-2.5 px-4 text-xs font-semibold transition-all shadow-sm ${
+          title="New YouTube track or search"
+          className={`no-drag flex-1 flex items-center justify-center gap-1.5 rounded-xl py-2.5 px-2 text-xs font-semibold transition-all shadow-sm ${
             activeId === null
               ? 'bg-olive-500 text-white shadow-olive-500/25 ring-1 ring-olive-400'
               : 'bg-white/10 text-white/90 hover:bg-white/15 hover:text-white'
           }`}
         >
-          <PlusIcon className="w-4 h-4" />
-          <span>New Track Split</span>
+          <PlusIcon className="w-3.5 h-3.5" />
+          <span className="truncate">New Track</span>
         </button>
+        {onOpenLocalFile && (
+          <button
+            onClick={onOpenLocalFile}
+            title="Load local audio file (MP3, WAV, FLAC, M4A...)"
+            className="no-drag flex items-center justify-center gap-1.5 rounded-xl py-2.5 px-3 text-xs font-semibold bg-white/10 text-white/90 hover:bg-white/15 hover:text-white transition-all cursor-pointer border border-white/5 hover:border-white/15 shrink-0"
+          >
+            <FolderIcon className="w-3.5 h-3.5 text-olive-400" />
+            <span>Open File</span>
+          </button>
+        )}
       </div>
 
       {/* Library Header & Search */}
@@ -165,6 +178,11 @@ export function Sidebar({
                       ) : (
                         <span className="text-[9px] px-1.5 py-0.2 rounded font-semibold uppercase bg-olive-500/20 text-olive-300">
                           {song.stems?.length ? `${song.stems.length} stems` : 'SOTA'}
+                        </span>
+                      )}
+                      {(song.source === 'local' || song.videoId.startsWith('local-')) && (
+                        <span className="text-[9px] px-1.5 py-0.2 rounded font-semibold uppercase bg-white/10 text-white/60">
+                          Local
                         </span>
                       )}
                     </>

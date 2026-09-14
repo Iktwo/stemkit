@@ -25,6 +25,8 @@ export interface Song {
   model?: string
   stems?: string[]
   took?: number
+  source?: 'youtube' | 'local'
+  filePath?: string
 }
 
 export interface AppSettings {
@@ -256,6 +258,11 @@ export interface StemKitApi {
   exportAllStems(videoId: string): Promise<{ saved: boolean; path?: string; count?: number }>
   searchYouTube(query: string): Promise<SearchResult[]>
   startJob(url: string, model?: string, stems?: string[], force?: boolean): Promise<{ started: boolean }>
+  startLocalJob(filePath: string, model?: string, stems?: string[], force?: boolean): Promise<{ started: boolean }>
+  pickAudioFiles(): Promise<string[] | null>
+  reprocessTrack(videoId: string, model?: string, stems?: string[]): Promise<void>
+  revealFile(filePath: string): Promise<void>
+  getPathForFile(file: File): string
   cancelJob(videoId?: string): Promise<void>
   openExternal(url: string): Promise<void>
   getAppVersion(): Promise<string>

@@ -7,7 +7,7 @@ import { fmtTime } from '../lib/format'
 import { Thumb } from '../lib/thumbs'
 import { StemLane } from './StemLane'
 import { Transport } from './Transport'
-import { DownloadIcon, ExternalIcon, RefreshIcon, XIcon, MicIcon, GuitarIcon, BassIcon } from './Icons'
+import { DownloadIcon, ExternalIcon, RefreshIcon, XIcon, MicIcon, GuitarIcon, BassIcon, FolderIcon } from './Icons'
 import { KaraokeStage } from './KaraokeStage'
 import { TabStage } from './TabStage'
 
@@ -158,6 +158,11 @@ export function Player({ song, settings, onReprocess }: Props): React.ReactEleme
                   <span className="text-xs text-white/40 font-mono">
                     BS-RoFormer (SOTA)
                   </span>
+                  {song.source === 'local' || song.videoId.startsWith('local-') ? (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-white/10 text-white/60 font-mono">
+                      Local Audio
+                    </span>
+                  ) : null}
                 </div>
                 <h2 className="text-2xl font-bold leading-snug truncate text-white">{song.title}</h2>
                 <p className="text-xs text-white/45 mt-1 font-mono truncate">
@@ -227,14 +232,27 @@ export function Player({ song, settings, onReprocess }: Props): React.ReactEleme
                   <DownloadIcon className="w-3.5 h-3.5" />
                   <span>Export All</span>
                 </button>
-                <button
-                  onClick={() => window.stemkit.openExternal(youtubeUrl)}
-                  className="no-drag glass rounded-xl px-2.5 py-1.5 text-xs font-medium text-white/60 hover:text-white hover:bg-white/10 transition-colors flex items-center gap-1.5 cursor-pointer"
-                  title="Open original video on YouTube"
-                >
-                  <ExternalIcon className="w-3 h-3 text-red-400" />
-                  <span className="text-[11px]">YouTube</span>
-                </button>
+                {song.source === 'local' || song.videoId.startsWith('local-') ? (
+                  song.filePath ? (
+                    <button
+                      onClick={() => window.stemkit.revealFile(song.filePath!)}
+                      className="no-drag glass rounded-xl px-2.5 py-1.5 text-xs font-medium text-white/70 hover:text-white hover:bg-white/10 transition-colors flex items-center gap-1.5 cursor-pointer"
+                      title="Reveal audio file in folder"
+                    >
+                      <FolderIcon className="w-3.5 h-3.5 text-olive-400" />
+                      <span className="text-[11px]">Show File</span>
+                    </button>
+                  ) : null
+                ) : (
+                  <button
+                    onClick={() => window.stemkit.openExternal(youtubeUrl)}
+                    className="no-drag glass rounded-xl px-2.5 py-1.5 text-xs font-medium text-white/60 hover:text-white hover:bg-white/10 transition-colors flex items-center gap-1.5 cursor-pointer"
+                    title="Open original video on YouTube"
+                  >
+                    <ExternalIcon className="w-3 h-3 text-red-400" />
+                    <span className="text-[11px]">YouTube</span>
+                  </button>
+                )}
               </div>
             </div>
           </div>

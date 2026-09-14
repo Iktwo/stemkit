@@ -52,6 +52,12 @@ function MainApp(): React.ReactElement {
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [lastUrl, setLastUrl] = useState('')
   const [lastModel, setLastModel] = useState(MODEL_EXTENDED)
+  const [lastJob, setLastJob] = useState<{
+    kind: 'url' | 'local'
+    target: string
+    model: string
+    stems?: string[]
+  } | null>(null)
   const [envLogs, setEnvLogs] = useState<EnvLog[]>([])
   const [update, setUpdate] = useState<UpdateEvent | null>(null)
   const [appVersion, setAppVersion] = useState<string | undefined>(undefined)
@@ -79,6 +85,7 @@ function MainApp(): React.ReactElement {
       if (ev.kind === 'progress') {
         setJobs((prev) => ({ ...prev, [ev.data.videoId]: ev.data }))
         setErrors((prev) => (prev[ev.data.videoId] ? withoutKey(prev, ev.data.videoId) : prev))
+        setActiveId((cur) => cur ?? ev.data.videoId)
       } else if (ev.kind === 'done') {
         clearBufferCache(ev.data.videoId)
         setJobs((prev) => withoutKey(prev, ev.data.videoId))
@@ -117,6 +124,7 @@ function MainApp(): React.ReactElement {
       setActiveId(vid)
       setLastUrl(url)
       setLastModel(model)
+      setLastJob({ kind: 'url', target: url, model, stems })
       setErrors((prev) => withoutKey(prev, vid))
       setJobs((prev) =>
         prev[vid]
@@ -128,16 +136,41 @@ function MainApp(): React.ReactElement {
     []
   )
 
+  const startLocalFile = useCallback(
+    async (filePath: string, model = MODEL_EXTENDED, stems?: string[], force = false): Promise<void> => {
+      setLastJob({ kind: 'local', target: filePath, model, stems })
+      await window.stemkit.startLocalJob(filePath, model, stems, force)
+    },
+    []
+  )
+
+  const handleOpenLocalFromSidebar = useCallback(async (): Promise<void> => {
+    try {
+      const files = await window.stemkit.pickAudioFiles()
+      if (!files || files.length === 0) return
+      for (const f of files) {
+        await startLocalFile(f, MODEL_EXTENDED)
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err))
+    }
+  }, [startLocalFile])
+
   const handleReprocess = useCallback(
     async (videoId: string, model: string, stems: string[]): Promise<void> => {
-      const url = `https://www.youtube.com/watch?v=${videoId}`
       clearBufferCache(videoId)
       if (currentSong?.videoId === videoId) {
         stopAndClose()
       }
-      await startUrl(url, model, stems, true)
+      setActiveId(videoId)
+      setErrors((prev) => withoutKey(prev, videoId))
+      setJobs((prev) => ({
+        ...prev,
+        [videoId]: { videoId, stage: 'separate', pct: 0, message: 'Reprocessing…', model }
+      }))
+      await window.stemkit.reprocessTrack(videoId, model, stems)
     },
-    [startUrl, currentSong?.videoId, stopAndClose]
+    [currentSong?.videoId, stopAndClose]
   )
 
   const cancelSelectedJob = useCallback(
@@ -149,8 +182,16 @@ function MainApp(): React.ReactElement {
   )
 
   const retryJob = useCallback((): void => {
-    if (lastUrl) void startUrl(lastUrl, lastModel)
-  }, [lastUrl, lastModel, startUrl])
+    if (lastJob) {
+      if (lastJob.kind === 'local') {
+        void startLocalFile(lastJob.target, lastJob.model, lastJob.stems, true)
+      } else {
+        void startUrl(lastJob.target, lastJob.model, lastJob.stems, true)
+      }
+    } else if (lastUrl) {
+      void startUrl(lastUrl, lastModel)
+    }
+  }, [lastJob, lastUrl, lastModel, startUrl, startLocalFile])
 
   const updateYtDlp = useCallback(async (): Promise<void> => {
     await window.stemkit.envUpdateYtDlp()
@@ -275,6 +316,7 @@ function MainApp(): React.ReactElement {
         pending={pendingMap}
         settings={settings ?? undefined}
         onStart={(u, m, s) => void startUrl(u, m, s)}
+        onStartLocal={(f, m, s) => void startLocalFile(f, m, s)}
         onSelect={(id) => setActiveId(id)}
         onOpenSettings={() => {
           void window.stemkit.envStatus().then(setStatus)
@@ -302,6 +344,7 @@ function MainApp(): React.ReactElement {
         onSelect={(id) => setActiveId(id)}
         onDelete={(id) => void deleteSong(id)}
         onAdd={() => setActiveId(null)}
+        onOpenLocalFile={handleOpenLocalFromSidebar}
         onInstallUpdate={() => window.stemkit.installUpdate()}
         onOpenSettings={() => {
           void window.stemkit.envStatus().then(setStatus)

@@ -188,53 +188,58 @@ export function StemLane({
         className="no-drag flex-1 h-14 rounded-lg cursor-pointer min-w-0"
       />
 
-      <input
-        type="range"
-        min={0}
-        max={1}
-        step={0.01}
-        value={volume}
-        onChange={(e) => onVolume(parseFloat(e.target.value))}
-        className="no-drag w-24 shrink-0"
-        style={{
-          background: `linear-gradient(to right, ${meta.color} ${volume * 100}%, rgba(255,255,255,0.14) ${volume * 100}%)`
-        }}
-      />
+      <div className="flex flex-col justify-center shrink-0 w-32 min-w-0 gap-1">
+        <div className="flex items-center justify-end gap-2 w-full">
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={volume}
+            onChange={(e) => onVolume(parseFloat(e.target.value))}
+            className="no-drag w-24 shrink-0"
+            style={{
+              background: `linear-gradient(to right, ${meta.color} ${volume * 100}%, rgba(255,255,255,0.14) ${volume * 100}%)`
+            }}
+          />
+          {onExport && (
+            <button
+              onClick={onExport}
+              title={meta.synth ? 'Export rendered synth lane as WAV' : 'Export stem as WAV'}
+              className="no-drag w-6 h-6 rounded-md bg-white/5 hover:bg-white/10 text-white/40 hover:text-white flex items-center justify-center transition-colors shrink-0"
+            >
+              <DownloadIcon className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
 
-      {(meta.id === 'guitar' || meta.id === 'bass') && onOpenTabs && (
-        <button
-          onClick={onOpenTabs}
-          title={meta.id === 'bass' ? 'Open Bass Tabs' : 'Open Guitar Tabs'}
-          className={`no-drag px-2.5 h-6 rounded-md border flex items-center gap-1 text-[11px] font-semibold transition-colors shrink-0 cursor-pointer shadow-sm ${
-            meta.id === 'bass'
-              ? 'bg-amber-500/20 hover:bg-amber-500/30 border-amber-500/30 text-amber-300'
-              : 'bg-emerald-500/20 hover:bg-emerald-500/30 border-emerald-500/30 text-emerald-300'
-          }`}
-        >
-          {meta.id === 'bass' ? <BassIcon className="w-3 h-3" /> : <GuitarIcon className="w-3 h-3" />}
-          <span>Tabs</span>
-        </button>
-      )}
-
-      {onExport && (
-        <button
-          onClick={onExport}
-          title={meta.synth ? 'Export rendered synth lane as WAV' : 'Export stem as WAV'}
-          className="no-drag w-6 h-6 rounded-md bg-white/5 hover:bg-white/10 text-white/40 hover:text-white flex items-center justify-center transition-colors shrink-0"
-        >
-          <DownloadIcon className="w-3.5 h-3.5" />
-        </button>
-      )}
-
-      {onRemove && (
-        <button
-          onClick={onRemove}
-          title="Remove this lane from the mixer"
-          className="no-drag w-6 h-6 rounded-md bg-white/5 hover:bg-rose-500/20 text-white/40 hover:text-rose-300 flex items-center justify-center transition-colors shrink-0"
-        >
-          <XIcon className="w-3.5 h-3.5" />
-        </button>
-      )}
+        <div className="flex items-center justify-end gap-1.5 w-full min-h-[20px]">
+          {(meta.id === 'guitar' || meta.id === 'bass') && onOpenTabs && (
+            <button
+              onClick={onOpenTabs}
+              title={meta.id === 'bass' ? 'Open Bass Tabs' : 'Open Guitar Tabs'}
+              className={`no-drag px-2 py-0.5 h-5 rounded-md border flex items-center gap-1 text-[10px] font-semibold transition-colors shrink-0 cursor-pointer shadow-sm ${
+                meta.id === 'bass'
+                  ? 'bg-amber-500/20 hover:bg-amber-500/30 border-amber-500/30 text-amber-300'
+                  : 'bg-emerald-500/20 hover:bg-emerald-500/30 border-emerald-500/30 text-emerald-300'
+              }`}
+            >
+              {meta.id === 'bass' ? <BassIcon className="w-3 h-3" /> : <GuitarIcon className="w-3 h-3" />}
+              <span>Tabs</span>
+            </button>
+          )}
+          {onRemove && (
+            <button
+              onClick={onRemove}
+              title="Remove this lane from the mixer"
+              className="no-drag px-2 py-0.5 h-5 rounded-md bg-white/5 hover:bg-rose-500/20 text-white/40 hover:text-rose-300 flex items-center gap-1 text-[10px] transition-colors shrink-0 cursor-pointer"
+            >
+              <XIcon className="w-3 h-3" />
+              <span>Remove</span>
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   )
 }

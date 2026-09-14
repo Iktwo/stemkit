@@ -102,6 +102,7 @@ export function removeSong(videoId: string): Song[] {
   const songs = loadSongs().filter((s) => s.videoId !== videoId)
   saveSongs(songs)
   rmSync(songDir(videoId), { recursive: true, force: true })
+  rmSync(join(userDataDir(), 'thumbs', `${videoId}.jpg`), { force: true })
   return songs
 }
 

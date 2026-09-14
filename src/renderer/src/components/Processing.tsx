@@ -130,7 +130,11 @@ export function Processing({
                   {done ? '✓' : i + 1}
                 </span>
                 <span className={`text-[13px] w-36 font-medium ${active ? 'text-white' : 'text-white/40'}`}>
-                  {stage.label}
+                  {stage.id === 'metadata' && !!job?.videoId?.startsWith('local-')
+                    ? 'Audio Info'
+                    : stage.id === 'download' && !!job?.videoId?.startsWith('local-')
+                    ? 'Input Audio'
+                    : stage.label}
                 </span>
                 <div className="flex-1 h-1.5 rounded-full bg-white/10 overflow-hidden">
                   <div

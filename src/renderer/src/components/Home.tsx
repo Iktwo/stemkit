@@ -10,7 +10,7 @@ import {
 import { parseVideoId } from '../../../shared/url'
 import { STEM_INFO, PREFERRED_ORDER } from '../lib/stems'
 import { fmtTime } from '../lib/format'
-import { GearIcon, GuitarIcon, BassIcon, MicIcon, LoopIcon } from './Icons'
+import { GearIcon, GuitarIcon, BassIcon, MicIcon, LoopIcon, FolderIcon, FileAudioIcon, UploadIcon } from './Icons'
 
 interface Props {
   hasSongs: boolean
@@ -18,6 +18,7 @@ interface Props {
   pending?: Record<string, { label: string; error?: boolean }>
   settings?: AppSettings
   onStart: (url: string, model: string, stems?: string[]) => void
+  onStartLocal: (filePath: string, model: string, stems?: string[]) => void
   onSelect: (videoId: string) => void
   onOpenSettings: () => void
 }
@@ -30,6 +31,7 @@ export function Home({
   pending = {},
   settings: _settings,
   onStart,
+  onStartLocal,
   onSelect,
   onOpenSettings
 }: Props): React.ReactElement {
@@ -39,6 +41,8 @@ export function Home({
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
   const [searchedFor, setSearchedFor] = useState('')
+  const [isDragging, setIsDragging] = useState(false)
+  const dragCounter = useRef(0)
   const seqRef = useRef(0)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -63,6 +67,65 @@ export function Home({
       MODEL_EXTENDED,
       orderedSelection
     )
+  }
+
+  const isLikelyLocalFile = (val: string): boolean => {
+    const t = val.trim().replace(/^["']|["']$/g, '')
+    if (t.startsWith('file://') || t.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(t)) return true
+    return /\.(mp3|wav|flac|m4a|aac|ogg|opus|aiff|aif|alac|wma)$/i.test(t)
+  }
+
+  const handleOpenLocal = async (): Promise<void> => {
+    try {
+      const files = await window.stemkit.pickAudioFiles()
+      if (!files || files.length === 0) return
+      for (const f of files) {
+        onStartLocal(f, MODEL_EXTENDED, orderedSelection)
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const handleDragEnter = (e: React.DragEvent): void => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounter.current += 1
+    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+      setIsDragging(true)
+    }
+  }
+
+  const handleDragLeave = (e: React.DragEvent): void => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounter.current -= 1
+    if (dragCounter.current <= 0) {
+      setIsDragging(false)
+      dragCounter.current = 0
+    }
+  }
+
+  const handleDragOver = (e: React.DragEvent): void => {
+    e.preventDefault()
+    e.stopPropagation()
+  }
+
+  const handleDrop = (e: React.DragEvent): void => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(false)
+    dragCounter.current = 0
+
+    const files = Array.from(e.dataTransfer.files)
+    if (files.length === 0) return
+
+    for (const file of files) {
+      const path = window.stemkit.getPathForFile(file)
+      if (path) {
+        onStartLocal(path, MODEL_EXTENDED, orderedSelection)
+      }
+    }
   }
 
   useEffect(() => {
@@ -95,7 +158,7 @@ export function Home({
     setQuery(value)
     if (debounceRef.current) clearTimeout(debounceRef.current)
     const trimmed = value.trim()
-    if (!trimmed || parseVideoId(trimmed)) {
+    if (!trimmed || parseVideoId(trimmed) || isLikelyLocalFile(trimmed)) {
       setResults([])
       setSearchError(null)
       setSearching(false)
@@ -107,6 +170,12 @@ export function Home({
   const submit = (): void => {
     const trimmed = query.trim()
     if (!trimmed || selected.size === 0) return
+    if (isLikelyLocalFile(trimmed)) {
+      onStartLocal(trimmed, MODEL_EXTENDED, orderedSelection)
+      setQuery('')
+      setResults([])
+      return
+    }
     if (parseVideoId(trimmed)) {
       startWithSelection(trimmed)
       setQuery('')
@@ -122,7 +191,24 @@ export function Home({
   }
 
   return (
-    <div className="h-full flex flex-col items-center px-8 pt-[6vh] pb-8 overflow-y-auto bg-gradient-to-b from-[#12140f] to-[#0a0c08]">
+    <div
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+      className="relative h-full flex flex-col items-center px-8 pt-[6vh] pb-8 overflow-y-auto bg-gradient-to-b from-[#12140f] to-[#0a0c08]"
+    >
+      {/* Drag & Drop Visual Overlay */}
+      {isDragging && (
+        <div className="absolute inset-4 z-50 bg-black/85 backdrop-blur-md rounded-3xl border-2 border-dashed border-olive-400 flex flex-col items-center justify-center pointer-events-none animate-in fade-in">
+          <UploadIcon className="w-12 h-12 text-olive-400 animate-bounce mb-3" />
+          <h3 className="text-xl font-bold text-white">Drop music file here</h3>
+          <p className="text-xs text-white/50 mt-1">
+            Will split with the {orderedSelection.length} selected {orderedSelection.length === 1 ? 'stem' : 'stems'}
+          </p>
+        </div>
+      )}
+
       <div className="w-full max-w-2xl space-y-6">
         {/* Header Hero */}
         <div className="text-center space-y-2">
@@ -137,6 +223,7 @@ export function Home({
               { icon: <GuitarIcon className="w-3 h-3" />, label: 'Guitar tabs', color: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' },
               { icon: <BassIcon className="w-3 h-3" />, label: 'Bass tabs', color: 'text-amber-300 bg-amber-500/10 border-amber-500/20' },
               { icon: <MicIcon className="w-3 h-3" />, label: 'Karaoke lyrics', color: 'text-pink-300 bg-pink-500/10 border-pink-500/20' },
+              { icon: <FileAudioIcon className="w-3 h-3" />, label: 'Local audio files', color: 'text-purple-300 bg-purple-500/10 border-purple-500/20' },
               { icon: <LoopIcon className="w-3 h-3" />, label: 'Loop & slow-down practice', color: 'text-sky-300 bg-sky-500/10 border-sky-500/20' }
             ].map((f) => (
               <span
@@ -150,24 +237,61 @@ export function Home({
           </div>
         </div>
 
-        {/* Search / Paste Input */}
+        {/* Search / Paste Input & Open File */}
         <div className="flex gap-2">
           <input
             autoFocus
             value={query}
             onChange={(e) => handleInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && submit()}
-            placeholder="Paste YouTube link or search artist / track title…"
+            placeholder="Paste YouTube link, audio file path, or search artist / track title…"
             spellCheck={false}
             className="no-drag flex-1 glass rounded-xl px-4 py-3 text-sm outline-none placeholder:text-white/30 focus:ring-2 focus:ring-olive-400/60 transition-all text-white"
           />
           <button
             onClick={submit}
             disabled={!query.trim() || selected.size === 0}
-            className="no-drag px-6 rounded-xl bg-olive-500 hover:bg-olive-400 active:scale-[0.98] text-white text-sm font-semibold transition-all disabled:opacity-40 disabled:hover:bg-olive-500 disabled:active:scale-100 shadow-md shadow-olive-500/25 cursor-pointer"
+            className="no-drag px-5 rounded-xl bg-olive-500 hover:bg-olive-400 active:scale-[0.98] text-white text-sm font-semibold transition-all disabled:opacity-40 disabled:hover:bg-olive-500 disabled:active:scale-100 shadow-md shadow-olive-500/25 cursor-pointer shrink-0"
           >
-            {parseVideoId(query) ? 'Split Stems' : 'Search'}
+            {isLikelyLocalFile(query)
+              ? 'Split Audio'
+              : parseVideoId(query)
+              ? 'Split Stems'
+              : 'Search'}
           </button>
+          <button
+            type="button"
+            onClick={handleOpenLocal}
+            disabled={selected.size === 0}
+            title="Load local music file (MP3, WAV, FLAC, M4A, OGG...)"
+            className="no-drag px-3.5 rounded-xl bg-white/10 hover:bg-white/15 text-white/90 hover:text-white text-sm font-semibold transition-all border border-white/5 hover:border-white/15 cursor-pointer flex items-center gap-1.5 shrink-0 disabled:opacity-40"
+          >
+            <FolderIcon className="w-4 h-4 text-olive-400" />
+            <span>Open File</span>
+          </button>
+        </div>
+
+        {/* Local File Dropzone / Hint Banner */}
+        <div
+          onClick={handleOpenLocal}
+          className="no-drag glass rounded-xl px-4 py-2 border border-dashed border-white/10 hover:border-olive-400/40 hover:bg-white/[0.04] transition-all cursor-pointer flex items-center justify-between group"
+        >
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg bg-olive-500/15 border border-olive-500/25 flex items-center justify-center text-olive-300 group-hover:bg-olive-500/25 transition-all">
+              <FileAudioIcon className="w-3.5 h-3.5" />
+            </div>
+            <div>
+              <span className="text-xs font-medium text-white/80 group-hover:text-white">
+                Drag & drop local music files here
+              </span>
+              <span className="text-[11px] text-white/35 ml-2">
+                (MP3, WAV, FLAC, M4A, OGG, AIFF…)
+              </span>
+            </div>
+          </div>
+          <span className="text-[11px] font-medium text-olive-300 group-hover:text-olive-200">
+            Browse files →
+          </span>
         </div>
 
         {/* Stem Selection Card */}

@@ -10,11 +10,11 @@ const YT_THUMB_URL = 'https://i.ytimg.com/vi/'
 
 const memo = new Map<string, Promise<string | null>>()
 
-function thumbsDir(): string {
+export function thumbsDir(): string {
   return join(userDataDir(), 'thumbs')
 }
 
-function thumbPath(videoId: string): string {
+export function thumbPath(videoId: string): string {
   return join(thumbsDir(), `${videoId}.jpg`)
 }
 
@@ -24,13 +24,39 @@ function toDataUrl(buf: Buffer): string {
   return `data:image/jpeg;base64,${buf.toString('base64')}`
 }
 
+export function saveThumb(videoId: string, buf: Buffer): void {
+  try {
+    mkdirSync(thumbsDir(), { recursive: true })
+    writeFileSync(thumbPath(videoId), buf)
+    memo.delete(videoId)
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.send('thumb:cached', videoId)
+    }
+  } catch {}
+}
+
 // called from the split pipeline (metadata stage) so the cache is warm
 // before the song ever shows up in the library
 export async function cacheThumbnail(videoId: string, url?: string): Promise<void> {
-  if (!VALID_ID.test(videoId)) return
   const file = thumbPath(videoId)
   if (existsSync(file)) return
-  const source = typeof url === 'string' && /^https:\/\//.test(url) ? url : `${YT_THUMB_URL}${videoId}/mqdefault.jpg`
+  if (url && /^https:\/\//.test(url)) {
+    try {
+      const res = await net.fetch(url, { signal: AbortSignal.timeout(10000) })
+      if (!res.ok) return
+      const buf = Buffer.from(await res.arrayBuffer())
+      if (buf.length === 0) return
+      mkdirSync(thumbsDir(), { recursive: true })
+      writeFileSync(file, buf)
+      memo.delete(videoId)
+      for (const win of BrowserWindow.getAllWindows()) {
+        win.webContents.send('thumb:cached', videoId)
+      }
+      return
+    } catch {}
+  }
+  if (!VALID_ID.test(videoId)) return
+  const source = `${YT_THUMB_URL}${videoId}/mqdefault.jpg`
   try {
     const res = await net.fetch(source, { signal: AbortSignal.timeout(10000) })
     if (!res.ok) return
@@ -39,18 +65,14 @@ export async function cacheThumbnail(videoId: string, url?: string): Promise<voi
     mkdirSync(thumbsDir(), { recursive: true })
     writeFileSync(file, buf)
     memo.delete(videoId)
-    // the renderer may have already resolved (and memoized) null for this id
-    // before the cache was warm — tell it to look again
     for (const win of BrowserWindow.getAllWindows()) {
       win.webContents.send('thumb:cached', videoId)
     }
   } catch {}
 }
 
-// resolves to a data URL from the local cache. When the "hide video" setting
-// is on, nothing is fetched online — missing thumbs just stay placeholders
+// resolves to a data URL from the local cache.
 export function getThumb(videoId: string): Promise<string | null> {
-  if (!VALID_ID.test(videoId)) return Promise.resolve(null)
   let p = memo.get(videoId)
   if (p) return p
   p = (async (): Promise<string | null> => {
@@ -60,6 +82,7 @@ export function getThumb(videoId: string): Promise<string | null> {
         return toDataUrl(readFileSync(file))
       } catch {}
     }
+    if (!VALID_ID.test(videoId)) return null
     try {
       const res = await net.fetch(`${YT_THUMB_URL}${videoId}/mqdefault.jpg`, {
         signal: AbortSignal.timeout(10000)
