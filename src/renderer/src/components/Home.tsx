@@ -3,11 +3,12 @@ import {
   MODEL_EXTENDED,
   DEFAULT_STEMS,
   type AppSettings,
+  type PlaylistInfo,
   type SearchResult,
   type Song,
   type StemId
 } from '../../../shared/types'
-import { parseVideoId } from '../../../shared/url'
+import { parseVideoId, parsePlaylistId } from '../../../shared/url'
 import { STEM_INFO, PREFERRED_ORDER } from '../lib/stems'
 import { fmtTime } from '../lib/format'
 import { GearIcon, GuitarIcon, BassIcon, MicIcon, LoopIcon, FolderIcon, FileAudioIcon, UploadIcon } from './Icons'
@@ -41,6 +42,10 @@ export function Home({
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
   const [searchedFor, setSearchedFor] = useState('')
+  const [playlist, setPlaylist] = useState<PlaylistInfo | null>(null)
+  const [playlistLoading, setPlaylistLoading] = useState(false)
+  const [playlistError, setPlaylistError] = useState<string | null>(null)
+  const [playlistChecked, setPlaylistChecked] = useState<Set<string>>(new Set())
   const [isDragging, setIsDragging] = useState(false)
   const dragCounter = useRef(0)
   const seqRef = useRef(0)
@@ -158,6 +163,18 @@ export function Home({
     setQuery(value)
     if (debounceRef.current) clearTimeout(debounceRef.current)
     const trimmed = value.trim()
+    const listId = parsePlaylistId(trimmed)
+    if (listId) {
+      setResults([])
+      setSearchError(null)
+      setSearching(false)
+      setPlaylistError(null)
+      setPlaylistLoading(true)
+      debounceRef.current = setTimeout(() => void loadPlaylist(trimmed, listId), 450)
+      return
+    }
+    setPlaylist(null)
+    setPlaylistLoading(false)
     if (!trimmed || parseVideoId(trimmed) || isLikelyLocalFile(trimmed)) {
       setResults([])
       setSearchError(null)
@@ -167,6 +184,62 @@ export function Home({
     debounceRef.current = setTimeout(() => void runSearch(trimmed), 450)
   }
 
+  const loadPlaylist = async (url: string, listId: string): Promise<void> => {
+    const seq = ++seqRef.current
+    setPlaylistLoading(true)
+    setPlaylistError(null)
+    try {
+      const info = await window.stemkit.fetchPlaylist(url)
+      if (seqRef.current !== seq) return
+      setPlaylist(info)
+      const importable = info.entries
+        .filter((e) => !songs.some((s) => s.videoId === e.videoId) && !pending[e.videoId])
+        .map((e) => e.videoId)
+      setPlaylistChecked(new Set(importable))
+    } catch (err) {
+      if (seqRef.current !== seq) return
+      setPlaylistError(err instanceof Error ? err.message : String(err))
+      setPlaylist(null)
+    } finally {
+      if (seqRef.current === seq) setPlaylistLoading(false)
+    }
+  }
+
+  const trackStatus = (videoId: string): 'saved' | 'pending' | 'failed' | 'new' => {
+    const p = pending[videoId]
+    if (p) return p.error ? 'failed' : 'pending'
+    if (songs.some((s) => s.videoId === videoId)) return 'saved'
+    return 'new'
+  }
+
+  const togglePlaylistTrack = (videoId: string): void => {
+    if (trackStatus(videoId) !== 'new') return
+    setPlaylistChecked((prev) => {
+      const next = new Set(prev)
+      if (next.has(videoId)) next.delete(videoId)
+      else next.add(videoId)
+      return next
+    })
+  }
+
+  const setAllPlaylistChecked = (on: boolean): void => {
+    if (!playlist) return
+    setPlaylistChecked(
+      on
+        ? new Set(playlist.entries.filter((e) => trackStatus(e.videoId) === 'new').map((e) => e.videoId))
+        : new Set()
+    )
+  }
+
+  const importSelectedTracks = (): void => {
+    if (!playlist) return
+    const picked = playlist.entries.filter((e) => playlistChecked.has(e.videoId))
+    for (const e of picked) {
+      startWithSelection(e.videoId)
+    }
+    setPlaylistChecked(new Set())
+  }
+
   const submit = (): void => {
     const trimmed = query.trim()
     if (!trimmed || selected.size === 0) return
@@ -174,6 +247,11 @@ export function Home({
       onStartLocal(trimmed, MODEL_EXTENDED, orderedSelection)
       setQuery('')
       setResults([])
+      return
+    }
+    const listId = parsePlaylistId(trimmed)
+    if (listId) {
+      void loadPlaylist(trimmed, listId)
       return
     }
     if (parseVideoId(trimmed)) {
@@ -255,6 +333,8 @@ export function Home({
           >
             {isLikelyLocalFile(query)
               ? 'Split Audio'
+              : parsePlaylistId(query)
+              ? 'Load Playlist'
               : parseVideoId(query)
               ? 'Split Stems'
               : 'Search'}
@@ -385,6 +465,139 @@ export function Home({
             })}
           </div>
         </div>
+
+        {/* Playlist Detection Panel */}
+        {(playlistLoading || playlistError || playlist) && (
+          <div className="space-y-2">
+            {playlistLoading && (
+              <div className="space-y-2">
+                <div className="glass rounded-xl h-[52px] animate-pulse" />
+                {[...Array(3)].map((_, i) => (
+                  <div
+                    key={i}
+                    className="glass rounded-xl h-[56px] animate-pulse"
+                    style={{ animationDelay: `${i * 120}ms` }}
+                  />
+                ))}
+              </div>
+            )}
+            {!playlistLoading && playlistError && (
+              <div className="rounded-xl bg-rose-500/10 border border-rose-400/20 px-4 py-3 text-[13px] text-rose-200">
+                Playlist lookup failed: {playlistError}
+              </div>
+            )}
+            {!playlistLoading && playlist && (
+              <div className="glass rounded-2xl border border-white/10 overflow-hidden rise-in">
+                <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-white/[0.06]">
+                  <div className="min-w-0">
+                    <p className="text-[11px] uppercase tracking-wider text-white/40 font-bold">
+                      Playlist detected
+                    </p>
+                    <p className="text-[14px] font-semibold text-white truncate mt-0.5">
+                      {playlist.title}
+                      <span className="text-white/40 font-normal ml-2">
+                        {playlist.entries.length} tracks
+                      </span>
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => setAllPlaylistChecked(true)}
+                      className="px-2 py-1 rounded-md bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition-colors cursor-pointer"
+                    >
+                      All
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAllPlaylistChecked(false)}
+                      className="px-2 py-1 rounded-md bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition-colors cursor-pointer"
+                    >
+                      None
+                    </button>
+                  </div>
+                </div>
+                <div className="max-h-[340px] overflow-y-auto p-2 space-y-1">
+                  {playlist.entries.map((e) => {
+                    const st = trackStatus(e.videoId)
+                    const checked = playlistChecked.has(e.videoId)
+                    return (
+                      <div
+                        key={e.videoId}
+                        onClick={() => togglePlaylistTrack(e.videoId)}
+                        className={`group flex items-center gap-3 rounded-xl p-2 border transition-all ${
+                          st !== 'new'
+                            ? 'opacity-55 cursor-default border-transparent bg-white/[0.02]'
+                            : checked
+                              ? 'bg-olive-500/[0.08] border-olive-500/25 cursor-pointer'
+                              : 'bg-white/[0.03] hover:bg-white/[0.06] border-transparent cursor-pointer'
+                        }`}
+                      >
+                        <span
+                          className={`shrink-0 w-4 h-4 rounded-md border flex items-center justify-center text-[10px] font-bold transition-all ${
+                            checked
+                              ? 'bg-olive-500 border-olive-500 text-white'
+                              : 'border-white/25 text-transparent group-hover:border-white/40'
+                          }`}
+                        >
+                          ✓
+                        </span>
+                        <img
+                          src={`https://i.ytimg.com/vi/${e.videoId}/default.jpg`}
+                          alt=""
+                          className="w-[64px] h-[36px] rounded-lg object-cover bg-white/5 shrink-0"
+                          draggable={false}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <span className="block text-[13px] font-medium truncate text-white/90">
+                            {e.title}
+                          </span>
+                          <span className="block text-[11px] text-white/40 mt-0.5 truncate">
+                            {e.channel}
+                            {typeof e.duration === 'number' && e.duration > 0
+                              ? ` · ${fmtTime(e.duration)}`
+                              : ''}
+                          </span>
+                        </div>
+                        {st === 'saved' && (
+                          <span className="shrink-0 pr-1 text-[11px] font-semibold text-emerald-300">
+                            ✓ In library
+                          </span>
+                        )}
+                        {st === 'pending' && (
+                          <span className="shrink-0 pr-1 flex items-center gap-1.5 text-[11px] font-medium text-olive-300">
+                            <span className="w-3 h-3 rounded-full border-2 border-white/20 border-t-olive-300 animate-spin" />
+                            {pending[e.videoId]!.label}
+                          </span>
+                        )}
+                        {st === 'failed' && (
+                          <span className="shrink-0 pr-1 text-[11px] font-semibold text-rose-300">
+                            Failed
+                          </span>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+                <div className="flex items-center justify-between gap-3 px-4 py-3 border-t border-white/[0.06]">
+                  <span className="text-[11px] text-white/40">
+                    {playlistChecked.size} of {playlist.entries.length} selected · queued tracks are
+                    split one by one
+                  </span>
+                  <button
+                    type="button"
+                    onClick={importSelectedTracks}
+                    disabled={playlistChecked.size === 0 || selected.size === 0}
+                    className="px-4 py-2 rounded-xl bg-olive-500 hover:bg-olive-400 active:scale-[0.98] text-white text-[13px] font-semibold transition-all disabled:opacity-40 disabled:hover:bg-olive-500 disabled:active:scale-100 shadow-md shadow-olive-500/25 cursor-pointer"
+                  >
+                    Import {playlistChecked.size}{' '}
+                    {playlistChecked.size === 1 ? 'track' : 'tracks'} →
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Search Results Area */}
         {(searching || searchError || results.length > 0) && (

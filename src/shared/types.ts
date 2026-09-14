@@ -97,6 +97,13 @@ export interface SearchResult {
   duration?: number
 }
 
+export interface PlaylistInfo {
+  playlistId: string
+  title: string
+  channel?: string
+  entries: SearchResult[]
+}
+
 export interface UpdateEvent {
   status: 'checking' | 'available' | 'none' | 'progress' | 'downloaded' | 'error'
   version?: string
@@ -257,6 +264,7 @@ export interface StemKitApi {
   exportStem(videoId: string, stem: string): Promise<{ saved: boolean; path?: string }>
   exportAllStems(videoId: string): Promise<{ saved: boolean; path?: string; count?: number }>
   searchYouTube(query: string): Promise<SearchResult[]>
+  fetchPlaylist(url: string): Promise<PlaylistInfo>
   startJob(url: string, model?: string, stems?: string[], force?: boolean): Promise<{ started: boolean }>
   startLocalJob(filePath: string, model?: string, stems?: string[], force?: boolean): Promise<{ started: boolean }>
   pickAudioFiles(): Promise<string[] | null>

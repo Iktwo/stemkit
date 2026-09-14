@@ -35,6 +35,7 @@ import {
   reprocessTrack,
   cancelJob,
   searchYouTube,
+  fetchPlaylistInfo,
   transcribeLyrics,
   transcribeGuitarTab,
   rebuildGuitarTab,
@@ -272,6 +273,7 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('search:youtube', (_e, query: string) => searchYouTube(query))
+  ipcMain.handle('youtube:playlist', (_e, url: string) => fetchPlaylistInfo(url))
   ipcMain.handle('app:version', () => app.getVersion())
   ipcMain.handle('settings:get', () => loadSettings())
   ipcMain.handle('settings:set', (_e, patch: Partial<AppSettings>) => {

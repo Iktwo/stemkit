@@ -42,9 +42,10 @@ import {
   type TabTranscribeOptions,
   type TabRebuildOptions,
   type TabMidiImportOptions,
-  type MidiFileInfo
+  type MidiFileInfo,
+  type PlaylistInfo
 } from '../shared/types'
-import { parseVideoId } from '../shared/url'
+import { parseVideoId, parsePlaylistId } from '../shared/url'
 import { cacheThumbnail, thumbPath, thumbsDir } from './thumbs'
 
 interface ActiveJob {
@@ -819,6 +820,73 @@ export async function searchYouTube(query: string): Promise<
     return mapped
   } catch {
     return []
+  }
+}
+
+export async function fetchPlaylistInfo(rawUrl: string): Promise<PlaylistInfo> {
+  const listId = parsePlaylistId(rawUrl)
+  if (!listId) throw new Error('Not a YouTube playlist URL')
+  // normalize to a playlist URL so watch?v=..&list=.. links resolve to the
+  // whole list instead of the single video
+  const url = `https://www.youtube.com/playlist?list=${listId}`
+
+  const results = await new Promise<string>((resolve, reject) => {
+    const child = spawn(
+      venvYtDlp(),
+      [...ytDlpRuntimeArgs(), '--no-warnings', '-J', '--flat-playlist', '--no-download', url],
+      { env: { ...process.env } }
+    )
+    let out = ''
+    let err = ''
+    child.stdout?.on('data', (c: Buffer) => {
+      out += c.toString()
+    })
+    child.stderr?.on('data', (c: Buffer) => {
+      err = (err + c.toString()).slice(-1000)
+    })
+    const timer = setTimeout(() => {
+      try {
+        child.kill('SIGKILL')
+      } catch {}
+      reject(new Error('Playlist lookup timed out'))
+    }, 60000)
+    child.on('error', (e) => {
+      clearTimeout(timer)
+      reject(e)
+    })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      if (code === 0) resolve(out)
+      else reject(new Error(err.split('\n').filter(Boolean).slice(-1).join('') || `playlist lookup exited ${code}`))
+    })
+  })
+
+  const data = JSON.parse(results) as Record<string, unknown>
+  const entriesRaw = Array.isArray(data.entries) ? data.entries : []
+  const entries = entriesRaw
+    .filter((e: Record<string, unknown>) => typeof e.id === 'string' && typeof e.title === 'string')
+    .filter((e: Record<string, unknown>) => {
+      const t = e.title as string
+      return !/^\[(private|deleted)/i.test(t)
+    })
+    .slice(0, 500)
+    .map((e: Record<string, unknown>) => ({
+      videoId: e.id as string,
+      title: e.title as string,
+      channel:
+        typeof e.uploader === 'string'
+          ? e.uploader
+          : typeof e.channel === 'string'
+            ? e.channel
+            : undefined,
+      duration: typeof e.duration === 'number' ? Math.round(e.duration) : undefined
+    }))
+
+  return {
+    playlistId: listId,
+    title: typeof data.title === 'string' ? data.title : 'YouTube playlist',
+    channel: typeof data.uploader === 'string' ? data.uploader : undefined,
+    entries
   }
 }
 

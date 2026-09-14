@@ -19,6 +19,7 @@ const api: StemKitApi = {
   exportStem: (videoId, stem) => ipcRenderer.invoke('stem:export', videoId, stem),
   exportAllStems: (videoId) => ipcRenderer.invoke('stems:export-all', videoId),
   searchYouTube: (query) => ipcRenderer.invoke('search:youtube', query),
+  fetchPlaylist: (url) => ipcRenderer.invoke('youtube:playlist', url),
   startJob: (url, model, stems, force) => ipcRenderer.invoke('jobs:start', url, model, stems, force),
   startLocalJob: (filePath, model, stems, force) =>
     ipcRenderer.invoke('jobs:start-local', filePath, model, stems, force),

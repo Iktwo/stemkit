@@ -13,3 +13,12 @@ export function parseVideoId(input: string): string | null {
   if (/^[\w-]{11}$/.test(t)) return t
   return null
 }
+
+export function parsePlaylistId(input: string): string | null {
+  const t = input.trim()
+  const m = t.match(/[?&]list=([\w-]+)/)
+  if (m) return m[1]
+  // bare playlist ids (PL/OL/UU/LL/FL prefixes); RD* are radio mixes, skip those
+  if (/^(PL|OL|UU|LL|FL)[\w-]{11,}$/.test(t)) return t
+  return null
+}
