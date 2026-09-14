@@ -13,6 +13,7 @@ publish:
 extraResources:
   - from: python
     to: python
+afterPack: scripts/after-pack.cjs
 mac:
   category: public.app-category.music
   icon: build/icon.png
